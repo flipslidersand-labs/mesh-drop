@@ -43,10 +43,11 @@ func serverTLS() (*tls.Config, error) {
 	}, nil
 }
 
-// clientTLS accepts any server cert — Phase 4 で Noise ハンドシェイクに置き換える。
+// clientTLS は QUIC トランスポート用の最小 TLS 設定を返す。
+// 実際の認証は Noise_XX ハンドシェイク (Phase 4) が担うため、証明書検証は行わない。
 func clientTLS() *tls.Config {
 	return &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec
+		InsecureSkipVerify: true, //nolint:gosec — Noise が上位で認証する
 		NextProtos:         []string{"meshdrop/1"},
 	}
 }

@@ -3,6 +3,7 @@ module github.com/flipslidersand/mesh-drop
 go 1.25.0
 
 require (
+	github.com/flynn/noise v1.1.0
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/quic-go/quic-go v0.60.0
 	github.com/schollz/progressbar/v3 v3.19.0

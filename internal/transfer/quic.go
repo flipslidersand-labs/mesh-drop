@@ -10,6 +10,8 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 	"lukechampine.com/blake3"
+
+	"github.com/flipslidersand/mesh-drop/internal/crypto"
 )
 
 // Listen は QUIC で 1 接続を待ち受け、ファイルを受信して保存する。
@@ -39,7 +41,17 @@ func Listen(ctx context.Context, addr string) error {
 	}
 	defer stream.Close()
 
-	meta, err := readMeta(stream)
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		return fmt.Errorf("noise keypair: %w", err)
+	}
+	fmt.Println("Noise_XX handshake (responder)...")
+	ns, err := crypto.HandshakeResponder(stream, key)
+	if err != nil {
+		return fmt.Errorf("noise handshake: %w", err)
+	}
+
+	meta, err := readMeta(ns)
 	if err != nil {
 		return fmt.Errorf("read meta: %w", err)
 	}
@@ -54,7 +66,7 @@ func Listen(ctx context.Context, addr string) error {
 
 	h := blake3.New(32, nil)
 	bar := progressbar.DefaultBytes(meta.Size, "receiving")
-	if _, err := io.Copy(io.MultiWriter(f, bar, h), stream); err != nil {
+	if _, err := io.Copy(io.MultiWriter(f, bar, h), ns); err != nil {
 		return fmt.Errorf("receive: %w", err)
 	}
 	fmt.Println()
@@ -105,13 +117,23 @@ func Send(ctx context.Context, addr, filePath string) error {
 	}
 	defer stream.Close()
 
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		return fmt.Errorf("noise keypair: %w", err)
+	}
+	fmt.Println("Noise_XX handshake (initiator)...")
+	ns, err := crypto.HandshakeInitiator(stream, key)
+	if err != nil {
+		return fmt.Errorf("noise handshake: %w", err)
+	}
+
 	meta := Meta{Name: filepath.Base(filePath), Size: info.Size(), Hash: hash}
-	if err := writeMeta(stream, meta); err != nil {
+	if err := writeMeta(ns, meta); err != nil {
 		return fmt.Errorf("write meta: %w", err)
 	}
 
 	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
-	if _, err := io.Copy(io.MultiWriter(stream, bar), f); err != nil {
+	if _, err := io.Copy(io.MultiWriter(ns, bar), f); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
 	fmt.Printf("\n✓ Sent: %s (%d bytes)\n", filePath, info.Size())
