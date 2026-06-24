@@ -9,6 +9,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
+	"lukechampine.com/blake3"
 )
 
 // Listen は QUIC で 1 接続を待ち受け、ファイルを受信して保存する。
@@ -51,11 +52,22 @@ func Listen(ctx context.Context, addr string) error {
 	}
 	defer f.Close()
 
+	h := blake3.New(32, nil)
 	bar := progressbar.DefaultBytes(meta.Size, "receiving")
-	if _, err := io.Copy(io.MultiWriter(f, bar), stream); err != nil {
+	if _, err := io.Copy(io.MultiWriter(f, bar, h), stream); err != nil {
 		return fmt.Errorf("receive: %w", err)
 	}
-	fmt.Printf("\n✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
+	fmt.Println()
+
+	if meta.Hash != "" {
+		got := fmt.Sprintf("%x", h.Sum(nil))
+		if got != meta.Hash {
+			_ = os.Remove(outPath)
+			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
+		}
+		fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
+	}
+	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
 }
 
@@ -72,6 +84,15 @@ func Send(ctx context.Context, addr, filePath string) error {
 		return err
 	}
 
+	// Phase 3: ファイル全体の BLAKE3 ハッシュを先に計算してから送信
+	hash, err := hashReader(f)
+	if err != nil {
+		return fmt.Errorf("hash: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek: %w", err)
+	}
+
 	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
@@ -84,7 +105,7 @@ func Send(ctx context.Context, addr, filePath string) error {
 	}
 	defer stream.Close()
 
-	meta := Meta{Name: filepath.Base(filePath), Size: info.Size()}
+	meta := Meta{Name: filepath.Base(filePath), Size: info.Size(), Hash: hash}
 	if err := writeMeta(stream, meta); err != nil {
 		return fmt.Errorf("write meta: %w", err)
 	}

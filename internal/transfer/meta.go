@@ -10,6 +10,7 @@ import (
 type Meta struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+	Hash string `json:"hash"` // BLAKE3-256 hex (Phase 3)
 }
 
 func writeMeta(w io.Writer, m Meta) error {
