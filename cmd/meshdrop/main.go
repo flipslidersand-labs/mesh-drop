@@ -53,6 +53,7 @@ func cmdReceive() *cobra.Command {
 
 func cmdSend() *cobra.Command {
 	var timeout time.Duration
+	var chunks int
 	cmd := &cobra.Command{
 		Use:   "send [file]",
 		Short: "Discover receivers on LAN and send a file",
@@ -61,6 +62,9 @@ func cmdSend() *cobra.Command {
 			file := args[0]
 			if _, err := os.Stat(file); err != nil {
 				return fmt.Errorf("file not found: %s", file)
+			}
+			if chunks < 1 {
+				return fmt.Errorf("--chunks must be >= 1")
 			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -81,10 +85,11 @@ func cmdSend() *cobra.Command {
 			}
 
 			peer := peers[0]
-			fmt.Printf("\n→ Connecting to %s (%s)...\n", peer.Name, peer.Addr())
-			return transfer.Send(ctx, peer.Addr(), file)
+			fmt.Printf("\n→ Connecting to %s (%s)  chunks=%d...\n", peer.Name, peer.Addr(), chunks)
+			return transfer.Send(ctx, peer.Addr(), file, chunks)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout")
+	cmd.Flags().IntVarP(&chunks, "chunks", "n", 4, "parallel QUIC stream count")
 	return cmd
 }

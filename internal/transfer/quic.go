@@ -6,21 +6,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
-	"lukechampine.com/blake3"
 
 	"github.com/flipslidersand/mesh-drop/internal/crypto"
 )
 
-// Listen は QUIC で 1 接続を待ち受け、ファイルを受信して保存する。
+// プロトコル概要:
+//   Stream 0 (control): Noise → Meta{Name, Size, Hash, Chunks}
+//   Stream 1..N (data):  Noise → ChunkMeta{Index, Offset, Size} → bytes
+
+// Listen は QUIC で 1 接続を待ち受け、並列チャンク転送でファイルを受信する。
 func Listen(ctx context.Context, addr string) error {
 	tlsConf, err := serverTLS()
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-
 	ln, err := quic.ListenAddr(addr, tlsConf, nil)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -28,81 +31,91 @@ func Listen(ctx context.Context, addr string) error {
 	defer ln.Close()
 
 	fmt.Printf("Waiting for file on %s ...\n", addr)
-
 	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
 	defer conn.CloseWithError(0, "done")
 
-	stream, err := conn.AcceptStream(ctx)
+	// --- Control stream: Meta ---
+	meta, err := acceptMeta(ctx, conn)
 	if err != nil {
-		return fmt.Errorf("accept stream: %w", err)
+		return fmt.Errorf("control stream: %w", err)
 	}
-	defer stream.Close()
-
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return fmt.Errorf("noise keypair: %w", err)
-	}
-	fmt.Println("Noise_XX handshake (responder)...")
-	ns, err := crypto.HandshakeResponder(stream, key)
-	if err != nil {
-		return fmt.Errorf("noise handshake: %w", err)
-	}
-
-	meta, err := readMeta(ns)
-	if err != nil {
-		return fmt.Errorf("read meta: %w", err)
-	}
-	fmt.Printf("Receiving: %s (%d bytes)\n", meta.Name, meta.Size)
+	fmt.Printf("Receiving: %s  %d bytes  %d chunk(s)\n", meta.Name, meta.Size, meta.Chunks)
 
 	outPath := filepath.Base(meta.Name)
 	f, err := os.Create(outPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	h := blake3.New(32, nil)
-	bar := progressbar.DefaultBytes(meta.Size, "receiving")
-	if _, err := io.Copy(io.MultiWriter(f, bar, h), ns); err != nil {
-		return fmt.Errorf("receive: %w", err)
+	if err := f.Truncate(meta.Size); err != nil {
+		f.Close()
+		return err
 	}
+
+	// --- Parallel data streams ---
+	bar := progressbar.DefaultBytes(meta.Size, "receiving")
+	errs := make([]error, meta.Chunks)
+	var wg sync.WaitGroup
+	for i := 0; i < meta.Chunks; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := acceptChunk(ctx, conn, f, bar); err != nil {
+				errs[i] = err
+			}
+		}()
+	}
+	wg.Wait()
 	fmt.Println()
 
-	if meta.Hash != "" {
-		got := fmt.Sprintf("%x", h.Sum(nil))
-		if got != meta.Hash {
+	for _, e := range errs {
+		if e != nil {
+			f.Close()
 			_ = os.Remove(outPath)
-			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
+			return e
 		}
-		fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
 	}
+
+	// --- Hash verification ---
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return err
+	}
+	got, err := hashReader(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	if meta.Hash != "" && got != meta.Hash {
+		_ = os.Remove(outPath)
+		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
+	}
+	fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
 	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
 }
 
-// Send は addr へ QUIC 接続し、filePath を転送する。
-func Send(ctx context.Context, addr, filePath string) error {
+// Send は addr へ QUIC 接続し、filePath を並列チャンクで転送する。
+func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
 	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
+	f.Close()
 
-	// Phase 3: ファイル全体の BLAKE3 ハッシュを先に計算してから送信
-	hash, err := hashReader(f)
+	fmt.Printf("Hashing %s ...\n", filepath.Base(filePath))
+	fh, _ := os.Open(filePath)
+	hash, err := hashReader(fh)
+	fh.Close()
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek: %w", err)
 	}
 
 	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
@@ -111,31 +124,149 @@ func Send(ctx context.Context, addr, filePath string) error {
 	}
 	defer conn.CloseWithError(0, "done")
 
+	meta := Meta{
+		Name:   filepath.Base(filePath),
+		Size:   info.Size(),
+		Hash:   hash,
+		Chunks: nChunks,
+	}
+
+	// --- Control stream: Meta ---
+	if err := sendMeta(ctx, conn, meta); err != nil {
+		return fmt.Errorf("control stream: %w", err)
+	}
+
+	// --- Parallel data streams ---
+	chunkSize := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
+	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
+	errs := make([]error, nChunks)
+	var wg sync.WaitGroup
+	for i := 0; i < nChunks; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			offset := int64(i) * chunkSize
+			size := chunkSize
+			if offset+size > info.Size() {
+				size = info.Size() - offset
+			}
+			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar)
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println()
+
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	fmt.Printf("✓ Sent: %s (%d bytes, %d chunks)\n", filePath, info.Size(), nChunks)
+	return nil
+}
+
+// --- helpers ---
+
+func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		return fmt.Errorf("open stream: %w", err)
+		return err
+	}
+	defer stream.Close()
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		return err
+	}
+	ns, err := crypto.HandshakeInitiator(stream, key)
+	if err != nil {
+		return err
+	}
+	return writeMeta(ns, meta)
+}
+
+func acceptMeta(ctx context.Context, conn *quic.Conn) (Meta, error) {
+	stream, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return Meta{}, err
+	}
+	defer stream.Close()
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		return Meta{}, err
+	}
+	ns, err := crypto.HandshakeResponder(stream, key)
+	if err != nil {
+		return Meta{}, err
+	}
+	return readMeta(ns)
+}
+
+func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int, offset, size int64, bar io.Writer) error {
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return fmt.Errorf("chunk %d open: %w", index, err)
 	}
 	defer stream.Close()
 
 	key, err := crypto.GenerateKeypair()
 	if err != nil {
-		return fmt.Errorf("noise keypair: %w", err)
+		return err
 	}
-	fmt.Println("Noise_XX handshake (initiator)...")
 	ns, err := crypto.HandshakeInitiator(stream, key)
 	if err != nil {
-		return fmt.Errorf("noise handshake: %w", err)
+		return fmt.Errorf("chunk %d noise: %w", index, err)
 	}
 
-	meta := Meta{Name: filepath.Base(filePath), Size: info.Size(), Hash: hash}
-	if err := writeMeta(ns, meta); err != nil {
-		return fmt.Errorf("write meta: %w", err)
+	if err := writeChunkMeta(ns, ChunkMeta{Index: index, Offset: offset, Size: size}); err != nil {
+		return fmt.Errorf("chunk %d meta: %w", index, err)
 	}
 
-	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
-	if _, err := io.Copy(io.MultiWriter(ns, bar), f); err != nil {
-		return fmt.Errorf("send: %w", err)
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("\n✓ Sent: %s (%d bytes)\n", filePath, info.Size())
-	return nil
+	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	_, err = io.CopyN(io.MultiWriter(ns, bar), f, size)
+	return err
+}
+
+// offsetWriter は *os.File の WriteAt をシーケンシャルな io.Writer として提供する。
+type offsetWriter struct {
+	f   *os.File
+	off int64
+}
+
+func (w *offsetWriter) Write(p []byte) (int, error) {
+	n, err := w.f.WriteAt(p, w.off)
+	w.off += int64(n)
+	return n, err
+}
+
+func acceptChunk(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer) error {
+	stream, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return fmt.Errorf("accept chunk stream: %w", err)
+	}
+	defer stream.Close()
+
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		return err
+	}
+	ns, err := crypto.HandshakeResponder(stream, key)
+	if err != nil {
+		return fmt.Errorf("chunk noise: %w", err)
+	}
+
+	cm, err := readChunkMeta(ns)
+	if err != nil {
+		return fmt.Errorf("chunk meta: %w", err)
+	}
+
+	ow := &offsetWriter{f: f, off: cm.Offset}
+	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
+	return err
 }
