@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,16 +29,57 @@ func Listen(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	defer ln.Close()
+	return acceptAndReceive(ctx, ln)
+}
 
-	fmt.Printf("Waiting for file on %s ...\n", addr)
+// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動しファイルを受信する。
+// NAT Traversal で穴あけ済みのソケットを渡すこと。
+func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
+	tlsConf, err := serverTLS()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	ln, err := quic.Listen(udpConn, tlsConf, nil)
+	if err != nil {
+		return fmt.Errorf("QUIC listen on conn: %w", err)
+	}
+	return acceptAndReceive(ctx, ln)
+}
+
+// Send は addr へ QUIC 接続し、filePath を並列チャンクで転送する。
+func Send(ctx context.Context, addr, filePath string, nChunks int) error {
+	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", addr, err)
+	}
+	return doSend(ctx, conn, filePath, nChunks)
+}
+
+// SendNAT は既存の UDP ソケットから peerAddr へ QUIC 接続しファイルを送信する。
+// NAT Traversal で穴あけ済みのソケットを渡すこと。
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
+	if err != nil {
+		return fmt.Errorf("QUIC dial NAT: %w", err)
+	}
+	return doSend(ctx, conn, filePath, nChunks)
+}
+
+// --- core transfer logic ---
+
+func acceptAndReceive(ctx context.Context, ln *quic.Listener) error {
+	defer ln.Close()
+	fmt.Printf("Waiting for file on %s ...\n", ln.Addr())
 	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
+	return doReceive(ctx, conn)
+}
+
+func doReceive(ctx context.Context, conn *quic.Conn) error {
 	defer conn.CloseWithError(0, "done")
 
-	// --- Control stream: Meta ---
 	meta, err := acceptMeta(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
@@ -54,23 +96,21 @@ func Listen(ctx context.Context, addr string) error {
 		return err
 	}
 
-	// --- Parallel data streams ---
 	bar := progressbar.DefaultBytes(meta.Size, "receiving")
-	errs := make([]error, meta.Chunks)
+	errCh := make(chan error, meta.Chunks)
 	var wg sync.WaitGroup
 	for i := 0; i < meta.Chunks; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := acceptChunk(ctx, conn, f, bar); err != nil {
-				errs[i] = err
-			}
+			errCh <- acceptChunk(ctx, conn, f, bar)
 		}()
 	}
 	wg.Wait()
+	close(errCh)
 	fmt.Println()
 
-	for _, e := range errs {
+	for e := range errCh {
 		if e != nil {
 			f.Close()
 			_ = os.Remove(outPath)
@@ -78,7 +118,6 @@ func Listen(ctx context.Context, addr string) error {
 		}
 	}
 
-	// --- Hash verification ---
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		f.Close()
 		return err
@@ -97,32 +136,29 @@ func Listen(ctx context.Context, addr string) error {
 	return nil
 }
 
-// Send は addr へ QUIC 接続し、filePath を並列チャンクで転送する。
-func Send(ctx context.Context, addr, filePath string, nChunks int) error {
+func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) error {
+	defer conn.CloseWithError(0, "done")
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	info, err := f.Stat()
+	f.Close()
 	if err != nil {
 		return err
 	}
-	f.Close()
 
 	fmt.Printf("Hashing %s ...\n", filepath.Base(filePath))
-	fh, _ := os.Open(filePath)
+	fh, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
 	hash, err := hashReader(fh)
 	fh.Close()
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
 	}
-
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
-	if err != nil {
-		return fmt.Errorf("dial %s: %w", addr, err)
-	}
-	defer conn.CloseWithError(0, "done")
 
 	meta := Meta{
 		Name:   filepath.Base(filePath),
@@ -130,13 +166,10 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 		Hash:   hash,
 		Chunks: nChunks,
 	}
-
-	// --- Control stream: Meta ---
 	if err := sendMeta(ctx, conn, meta); err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
-	// --- Parallel data streams ---
 	chunkSize := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
 	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
 	errs := make([]error, nChunks)
@@ -165,7 +198,7 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 	return nil
 }
 
-// --- helpers ---
+// --- stream helpers ---
 
 func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) error {
 	stream, err := conn.OpenStreamSync(ctx)
