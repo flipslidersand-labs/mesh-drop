@@ -16,10 +16,14 @@ import (
 )
 
 // プロトコル概要:
-//   Stream 0 (control): Noise → Meta{Name, Size, Hash, Chunks}
-//   Stream 1..N (data):  Noise → ChunkMeta{Index, Offset, Size} → bytes
+//   Stream 0 (control): Noise → Meta{Name, Size, Hash, Chunks, ...}
+//   Stream 1..N (data):  Noise → ChunkMeta{Index, Offset, Size, FileIndex} → bytes
+//
+// Meta.IsBatch=true  → dir.go の doReceiveDir へ dispatch
+// Meta.IsPipe=true   → pipe.go の doReceivePipeConn へ dispatch
+// それ以外           → doReceiveFile（シングルファイル）
 
-// Listen は QUIC で 1 接続を待ち受け、並列チャンク転送でファイルを受信する。
+// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
 func Listen(ctx context.Context, addr string) error {
 	tlsConf, err := serverTLS()
 	if err != nil {
@@ -29,11 +33,10 @@ func Listen(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	return acceptAndReceive(ctx, ln)
+	return acceptAndDispatch(ctx, ln)
 }
 
-// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動しファイルを受信する。
-// NAT Traversal で穴あけ済みのソケットを渡すこと。
+// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
 func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	tlsConf, err := serverTLS()
 	if err != nil {
@@ -43,10 +46,10 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
-	return acceptAndReceive(ctx, ln)
+	return acceptAndDispatch(ctx, ln)
 }
 
-// Send は addr へ QUIC 接続し、filePath を並列チャンクで転送する。
+// Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
 	if err != nil {
@@ -55,8 +58,7 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 	return doSend(ctx, conn, filePath, nChunks)
 }
 
-// SendNAT は既存の UDP ソケットから peerAddr へ QUIC 接続しファイルを送信する。
-// NAT Traversal で穴あけ済みのソケットを渡すこと。
+// SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
 	if err != nil {
@@ -65,76 +67,36 @@ func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, f
 	return doSend(ctx, conn, filePath, nChunks)
 }
 
-// --- core transfer logic ---
+// --- core: accept & dispatch ---
 
-func acceptAndReceive(ctx context.Context, ln *quic.Listener) error {
+func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
 	defer ln.Close()
-	fmt.Printf("Waiting for file on %s ...\n", ln.Addr())
+	fmt.Printf("Waiting for transfer on %s ...\n", ln.Addr())
 	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
-	return doReceive(ctx, conn)
+	return dispatchConn(ctx, conn)
 }
 
-func doReceive(ctx context.Context, conn *quic.Conn) error {
-	defer conn.CloseWithError(0, "done")
-
+// dispatchConn は Meta を読み種別に応じてハンドラへ振り分ける。
+func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	meta, err := acceptMeta(ctx, conn)
 	if err != nil {
+		conn.CloseWithError(1, "meta error")
 		return fmt.Errorf("control stream: %w", err)
 	}
-	fmt.Printf("Receiving: %s  %d bytes  %d chunk(s)\n", meta.Name, meta.Size, meta.Chunks)
-
-	outPath := filepath.Base(meta.Name)
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
+	switch {
+	case meta.IsPipe:
+		return doReceivePipeConn(ctx, conn)
+	case meta.IsBatch:
+		return doReceiveDir(ctx, conn, meta, ".")
+	default:
+		return doReceiveFile(ctx, conn, meta)
 	}
-	if err := f.Truncate(meta.Size); err != nil {
-		f.Close()
-		return err
-	}
-
-	bar := progressbar.DefaultBytes(meta.Size, "receiving")
-	errCh := make(chan error, meta.Chunks)
-	var wg sync.WaitGroup
-	for i := 0; i < meta.Chunks; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errCh <- acceptChunk(ctx, conn, f, bar)
-		}()
-	}
-	wg.Wait()
-	close(errCh)
-	fmt.Println()
-
-	for e := range errCh {
-		if e != nil {
-			f.Close()
-			_ = os.Remove(outPath)
-			return e
-		}
-	}
-
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		f.Close()
-		return err
-	}
-	got, err := hashReader(f)
-	f.Close()
-	if err != nil {
-		return err
-	}
-	if meta.Hash != "" && got != meta.Hash {
-		_ = os.Remove(outPath)
-		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
-	}
-	fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
-	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
-	return nil
 }
+
+// --- single file ---
 
 func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) error {
 	defer conn.CloseWithError(0, "done")
@@ -195,6 +157,62 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		}
 	}
 	fmt.Printf("✓ Sent: %s (%d bytes, %d chunks)\n", filePath, info.Size(), nChunks)
+	return nil
+}
+
+// doReceiveFile は Meta 解析済みの接続からシングルファイルを受信する。
+func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta) error {
+	defer conn.CloseWithError(0, "done")
+
+	fmt.Printf("Receiving: %s  %d bytes  %d chunk(s)\n", meta.Name, meta.Size, meta.Chunks)
+
+	outPath := filepath.Base(meta.Name)
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(meta.Size); err != nil {
+		f.Close()
+		return err
+	}
+
+	bar := progressbar.DefaultBytes(meta.Size, "receiving")
+	errCh := make(chan error, meta.Chunks)
+	var wg sync.WaitGroup
+	for i := 0; i < meta.Chunks; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- acceptChunk(ctx, conn, f, bar)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	fmt.Println()
+
+	for e := range errCh {
+		if e != nil {
+			f.Close()
+			_ = os.Remove(outPath)
+			return e
+		}
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return err
+	}
+	got, err := hashReader(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	if meta.Hash != "" && got != meta.Hash {
+		_ = os.Remove(outPath)
+		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
+	}
+	fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
+	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
 }
 
