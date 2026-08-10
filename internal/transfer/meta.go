@@ -35,6 +35,38 @@ type ChunkMeta struct {
 	FileIndex int   `json:"file_index,omitempty"`
 }
 
+// ResumeState は受信側が送信側へ返す「完了済みチャンク」情報。
+// 送信側はこれを見てスキップし、未完了チャンクのみ再送する。
+// 互換性: ResumeState を理解しない旧クライアントは無視してフル送信する。
+type ResumeState struct {
+	ChunksDone []int `json:"chunks_done"` // 完了済みチャンクのインデックス
+}
+
+func writeResumeState(w io.Writer, rs ResumeState) error {
+	b, err := json.Marshal(rs)
+	if err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, uint32(len(b))); err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
+func readResumeState(r io.Reader) (ResumeState, error) {
+	var length uint32
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return ResumeState{}, err
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return ResumeState{}, err
+	}
+	var rs ResumeState
+	return rs, json.Unmarshal(buf, &rs)
+}
+
 func writeMeta(w io.Writer, m Meta) error {
 	b, err := json.Marshal(m)
 	if err != nil {
