@@ -86,31 +86,50 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 }
 
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
+// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
+	ns, _, err := HandshakeInitiatorFull(rw, key)
+	return ns, err
+}
+
+// HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
+// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
+	ns, _, err := HandshakeResponderFull(rw, key)
+	return ns, err
+}
+
+// HandshakeInitiatorFull はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
+// 制御ストリームや TOFU 検証が必要な箇所で使用する。
+func HandshakeInitiatorFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
 	hs, err := newHS(true, key)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return doXX(rw, hs, true)
 }
 
-// HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
-func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
+// HandshakeResponderFull はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
+// 制御ストリームや TOFU 検証が必要な箇所で使用する。
+func HandshakeResponderFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
 	hs, err := newHS(false, key)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return doXX(rw, hs, false)
 }
 
-// doXX は Noise_XX の 3 メッセージハンドシェイクを実行し、暗号化ストリームを返す。
+// doXX は Noise_XX の 3 メッセージハンドシェイクを実行し、暗号化ストリームとピアの静的公開鍵を返す。
 //
 // XX パターン:
 //
 //	→ e              (msg1: initiator 送信)
 //	← e, ee, s, es   (msg2: responder 送信)
 //	→ s, se           (msg3: initiator 送信 → 両側で CipherState 取得)
-func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, error) {
+//
+// CipherState の方向: cs0 = I→R (initiator enc / responder dec)
+//                     cs1 = R→I (responder enc / initiator dec)
+func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, []byte, error) {
 	send := func() (*noise.CipherState, *noise.CipherState, error) {
 		msg, cs0, cs1, err := hs.WriteMessage(nil, nil)
 		if err != nil {
@@ -142,28 +161,29 @@ func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStr
 
 	if initiator {
 		if _, _, err := send(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if _, _, err := recv(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		cs0, cs1, err := send() // msg3 → cipher states
+		cs0, cs1, err := send() // msg3 → cipher states; peer static available after msg2
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &NoiseStream{rw: rw, enc: cs0, dec: cs1}, nil
+		// initiator: enc=cs0 (I→R), dec=cs1 (R→I)
+		return &NoiseStream{rw: rw, enc: cs0, dec: cs1}, hs.PeerStatic(), nil
 	}
 
 	if _, _, err := recv(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, _, err := send(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cs0, cs1, err := recv() // msg3 受信 → cipher states
+	cs0, cs1, err := recv() // msg3 受信 → cipher states; peer static available after msg3
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// responder: cs0 = I→R (dec), cs1 = R→I (enc)
-	return &NoiseStream{rw: rw, enc: cs1, dec: cs0}, nil
+	// responder: enc=cs1 (R→I), dec=cs0 (I→R)
+	return &NoiseStream{rw: rw, enc: cs1, dec: cs0}, hs.PeerStatic(), nil
 }

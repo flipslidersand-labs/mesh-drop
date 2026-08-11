@@ -21,6 +21,7 @@ type RelayServer struct {
 }
 
 type rdv struct {
+	mu    sync.Mutex  // addrA の読み書きを保護する
 	addrA string      // 最初に登録したピア (受信側)
 	chB   chan string // 2番目のピア (送信側) が登録すると addrA の待機を解除
 }
@@ -82,10 +83,19 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var peerAddr string
-	if sess.addrA == "" {
-		// 最初の登録 (受信側): 送信側が来るまで待機
+	// addrA の判定と書き込みを rdv のミューテックスで保護する。
+	// 2接続が同時に sess.addrA == "" を見て両方が "最初の登録者" になるのを防ぐ。
+	sess.mu.Lock()
+	isFirst := sess.addrA == ""
+	if isFirst {
 		sess.addrA = myAddr
+	}
+	peerAddrA := sess.addrA // 2番目登録者が使う
+	sess.mu.Unlock()
+
+	var peerAddr string
+	if isFirst {
+		// 最初の登録 (受信側): 送信側が来るまで待機
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
 		select {
@@ -96,7 +106,7 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// 2番目の登録 (送信側): 受信側を即時解除してピアアドレスを交換
-		peerAddr = sess.addrA
+		peerAddr = peerAddrA
 		sess.chB <- myAddr
 	}
 

@@ -23,6 +23,11 @@ import (
 )
 
 func main() {
+	// 永続 identity と TOFU ストアを初期化する。失敗しても ephemeral モードで継続する。
+	if err := transfer.InitSession(); err != nil {
+		log.Printf("Warning: could not initialize session identity: %v (using ephemeral keys)", err)
+	}
+
 	root := &cobra.Command{
 		Use:   "meshdrop",
 		Short: "P2P encrypted file transfer",
