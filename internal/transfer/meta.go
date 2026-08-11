@@ -11,10 +11,10 @@ import (
 // Size == -1 のときは pipe（ストリーミング）モード。
 type Meta struct {
 	Name    string     `json:"name"`
-	Size    int64      `json:"size"`              // -1 = streaming/pipe
-	Hash    string     `json:"hash"`              // BLAKE3-256 hex
-	Chunks  int        `json:"chunks"`            // 並列データストリーム数
-	Files   []FileMeta `json:"files,omitempty"`   // nil = single-file mode
+	Size    int64      `json:"size"`            // -1 = streaming/pipe
+	Hash    string     `json:"hash"`            // BLAKE3-256 hex
+	Chunks  int        `json:"chunks"`          // 並列データストリーム数
+	Files   []FileMeta `json:"files,omitempty"` // nil = single-file mode
 	IsBatch bool       `json:"is_batch,omitempty"`
 	IsPipe  bool       `json:"is_pipe,omitempty"`
 }
