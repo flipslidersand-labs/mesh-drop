@@ -2,10 +2,10 @@ package nat
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,7 +38,14 @@ func (s *RelayServer) Handler() http.Handler {
 
 // Start は addr でリレーサーバーを起動する (ブロッキング)。
 func (s *RelayServer) Start(addr string) error {
-	return http.ListenAndServe(addr, s.Handler())
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      s.Handler(),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 60s
+		IdleTimeout:  60 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
 
 func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -146,8 +153,11 @@ func Rendezvous(relayURL, code, myAddr string) (string, error) {
 func randomCode(n int) string {
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = alpha[rand.Intn(len(alpha))]
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	for i, v := range b {
+		b[i] = alpha[int(v)%len(alpha)]
 	}
 	return string(b)
 }
