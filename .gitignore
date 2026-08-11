@@ -1,0 +1,37 @@
+# Binaries
+/meshdrop
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build outputs
+/build/
+/dist/
+target/
+*.o
+*.a
+
+# Go
+vendor/
+go.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test coverage
+coverage/
+*.out
+*.prof
+
+# Checkpoint files (resume state)
+.*.meshdrop-state
+
+# Logs
+*.log
+logs/
