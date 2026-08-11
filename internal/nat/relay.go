@@ -21,7 +21,7 @@ type RelayServer struct {
 }
 
 type rdv struct {
-	addrA string     // 最初に登録したピア (受信側)
+	addrA string      // 最初に登録したピア (受信側)
 	chB   chan string // 2番目のピア (送信側) が登録すると addrA の待機を解除
 }
 

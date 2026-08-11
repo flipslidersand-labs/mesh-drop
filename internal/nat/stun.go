@@ -101,7 +101,7 @@ func DiscoverExternalIP(stunServer string) (net.IP, error) {
 func buildReq(txID [12]byte) []byte {
 	req := make([]byte, 20)
 	binary.BigEndian.PutUint16(req[0:2], 0x0001) // Binding Request
-	binary.BigEndian.PutUint16(req[2:4], 0)       // no attributes
+	binary.BigEndian.PutUint16(req[2:4], 0)      // no attributes
 	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
 	copy(req[8:], txID[:])
 	return req
