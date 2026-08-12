@@ -63,8 +63,7 @@ func controlHandshakeInitiator(stream io.ReadWriter) (*crypto.NoiseStream, []byt
 		return nil, nil, err
 	}
 	if sessionPeers != nil && len(peerStatic) > 0 {
-		fp := crypto.Fingerprint(peerStatic)
-		if err := sessionPeers.Verify(fp); err != nil {
+		if err := sessionPeers.Verify(peerStatic); err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}
@@ -84,8 +83,7 @@ func controlHandshakeResponder(stream io.ReadWriter) (*crypto.NoiseStream, []byt
 		return nil, nil, err
 	}
 	if sessionPeers != nil && len(peerStatic) > 0 {
-		fp := crypto.Fingerprint(peerStatic)
-		if err := sessionPeers.Verify(fp); err != nil {
+		if err := sessionPeers.Verify(peerStatic); err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}

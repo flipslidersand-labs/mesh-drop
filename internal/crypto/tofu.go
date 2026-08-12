@@ -29,18 +29,24 @@ func NewKnownPeers(dir string) *KnownPeers {
 	return kp
 }
 
-// Verify checks whether fingerprint is trusted. On first encounter it
-// prompts the user interactively (requires a TTY on stdin). Returns nil
-// if the peer is trusted, an error if rejected or the prompt cannot be shown.
-func (kp *KnownPeers) Verify(fingerprint string) error {
+// Verify checks whether pub is a trusted peer public key (TOFU).
+// On first encounter it prompts the user interactively (requires a TTY on stdin).
+// Returns nil if trusted, an error if rejected or the prompt cannot be shown.
+// Storage uses FingerprintKey (full 64-char hex). Display uses FingerprintShort.
+func (kp *KnownPeers) Verify(pub []byte) error {
+	key := FingerprintKey(pub)
+	if key == "" {
+		return fmt.Errorf("peer verification failed: empty public key")
+	}
+
 	kp.mu.Lock()
 	defer kp.mu.Unlock()
 
-	if _, ok := kp.cache[fingerprint]; ok {
+	if _, ok := kp.cache[key]; ok {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", fingerprint)
+	fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", FingerprintShort(pub))
 	fmt.Fprintf(os.Stderr, "Trust this peer? [y/N]: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -49,13 +55,13 @@ func (kp *KnownPeers) Verify(fingerprint string) error {
 	}
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	if answer != "y" && answer != "yes" {
-		return fmt.Errorf("peer not trusted: %s", fingerprint)
+		return fmt.Errorf("peer not trusted: %s", FingerprintShort(pub))
 	}
 
-	if err := kp.appendFile(fingerprint); err != nil {
+	if err := kp.appendFile(key); err != nil {
 		return err
 	}
-	kp.cache[fingerprint] = struct{}{}
+	kp.cache[key] = struct{}{}
 	return nil
 }
 
