@@ -21,10 +21,18 @@ type RelayServer struct {
 	sessions map[string]*rdv
 }
 
+// maxSessions はメモリ枯渇防止のためのセッション数上限。
+const maxSessions = 10_000
+
+// sessionTTL は handleJoin が一度も呼ばれなかったセッションの有効期限。
+// handleJoin 内の long-poll タイムアウト (60s) より余裕を持たせる。
+const sessionTTL = 70 * time.Second
+
 type rdv struct {
 	mu    sync.Mutex  // addrA の読み書きを保護する
 	addrA string      // 最初に登録したピア (受信側)
 	chB   chan string // 2番目のピア (送信側) が登録すると addrA の待機を解除
+	done  chan struct{} // ランデブー完了またはタイムアウトで close される
 }
 
 func NewRelayServer() *RelayServer {
@@ -56,9 +64,28 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := randomCode(6)
+	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{})}
+
 	s.mu.Lock()
-	s.sessions[code] = &rdv{chB: make(chan string, 1)}
+	if len(s.sessions) >= maxSessions {
+		s.mu.Unlock()
+		http.Error(w, "too many sessions", http.StatusServiceUnavailable)
+		return
+	}
+	s.sessions[code] = sess
 	s.mu.Unlock()
+
+	// handleJoin が一度も呼ばれない場合の TTL クリーンアップ。
+	go func() {
+		select {
+		case <-sess.done:
+		case <-time.After(sessionTTL):
+			s.mu.Lock()
+			delete(s.sessions, code)
+			s.mu.Unlock()
+		}
+	}()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"code": code}) //nolint:errcheck
 }
@@ -111,7 +138,16 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		select {
 		case peerAddr = <-sess.chB:
+			// ランデブー完了 — セッションを削除して TTL ゴルーチンを終了させる
+			s.mu.Lock()
+			delete(s.sessions, code)
+			s.mu.Unlock()
+			close(sess.done)
 		case <-ctx.Done():
+			s.mu.Lock()
+			delete(s.sessions, code)
+			s.mu.Unlock()
+			close(sess.done)
 			http.Error(w, "timeout: peer did not connect within 60s", http.StatusRequestTimeout)
 			return
 		}
