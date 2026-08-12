@@ -217,6 +217,10 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
 func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string) error {
+	if conn != nil {
+		defer conn.CloseWithError(0, "done")
+	}
+
 	totalSize := totalDirSize(meta.Files)
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
 		meta.Name, len(meta.Files), totalSize, meta.Chunks)
