@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -68,10 +69,20 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := strings.TrimPrefix(r.URL.Path, "/session/")
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 64))
+	// 64 バイト上限: IPv6 アドレス最大長 ([xxxx:...:xxxx]:65535) は約 47 文字で収まる
+	const maxAddrLen = 64
+	body, _ := io.ReadAll(io.LimitReader(r.Body, maxAddrLen+1))
+	if len(body) > maxAddrLen {
+		http.Error(w, "address too long", http.StatusBadRequest)
+		return
+	}
 	myAddr := strings.TrimSpace(string(body))
 	if myAddr == "" {
 		http.Error(w, "body must be external addr (ip:port)", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := net.SplitHostPort(myAddr); err != nil {
+		http.Error(w, "invalid addr format: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

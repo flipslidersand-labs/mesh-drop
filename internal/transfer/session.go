@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"io"
+	"sync"
 
 	"github.com/flipslidersand/mesh-drop/internal/crypto"
 	"github.com/flynn/noise"
@@ -14,18 +15,24 @@ var sessionIdentity noise.DHKey
 // sessionPeers は TOFU 検証ストア。nil の場合は TOFU を行わない。
 var sessionPeers *crypto.KnownPeers
 
+var initOnce sync.Once
+
 // InitSession loads (or creates) the persistent identity and TOFU store from the
-// default config directory. Call this once from main() before any transfers.
+// default config directory. Safe to call from multiple goroutines; executes only once.
 // Non-fatal: if initialization fails the session falls back to ephemeral keys.
 func InitSession() error {
-	dir := crypto.IdentityDir()
-	key, err := crypto.LoadOrCreateIdentity(dir)
-	if err != nil {
-		return err
-	}
-	sessionIdentity = key
-	sessionPeers = crypto.NewKnownPeers(dir)
-	return nil
+	var initErr error
+	initOnce.Do(func() {
+		dir := crypto.IdentityDir()
+		key, err := crypto.LoadOrCreateIdentity(dir)
+		if err != nil {
+			initErr = err
+			return
+		}
+		sessionIdentity = key
+		sessionPeers = crypto.NewKnownPeers(dir)
+	})
+	return initErr
 }
 
 // controlHandshakeInitiator は制御ストリーム用のハンドシェイクを実行する。

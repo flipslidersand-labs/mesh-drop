@@ -284,7 +284,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 		if fm.Hash != "" && got != fm.Hash {
 			return fmt.Errorf("%w: %s\n  want: %s...\n   got: %s...",
-				ErrHashMismatch, fm.Path, fm.Hash[:16], got[:16])
+				ErrHashMismatch, fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
 		}
 	}
 

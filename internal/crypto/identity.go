@@ -34,7 +34,9 @@ func LoadOrCreateIdentity(dir string) (noise.DHKey, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return noise.DHKey{}, err
 	}
-	raw := append(key.Private, key.Public...)
+	raw := make([]byte, 64)
+	copy(raw[:32], key.Private)
+	copy(raw[32:], key.Public)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return noise.DHKey{}, err
 	}

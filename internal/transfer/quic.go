@@ -199,7 +199,6 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		_, _ = bar.Write(make([]byte, sz))
 	}
 
-	remaining := nChunks - len(skipSet)
 	errs := make([]error, nChunks)
 	var wg sync.WaitGroup
 	for i := 0; i < nChunks; i++ {
@@ -217,7 +216,6 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar)
 		}(i)
 	}
-	_ = remaining
 	wg.Wait()
 	fmt.Println()
 
@@ -354,10 +352,10 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	if meta.Hash != "" && got != meta.Hash {
 		_ = os.Remove(outPath)
 		cp.finish()
-		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, meta.Hash[:16], got[:16])
+		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 	}
 	cp.finish()
-	fmt.Printf("✓ Hash OK  (%s...)\n", meta.Hash[:16])
+	fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
 	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
 }
@@ -399,6 +397,14 @@ func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int,
 	}
 	_, err = io.CopyN(io.MultiWriter(ns, bar), f, size)
 	return err
+}
+
+// hashPreview は表示用に hash 文字列の先頭 n 文字を安全に返す。
+func hashPreview(h string, n int) string {
+	if len(h) <= n {
+		return h
+	}
+	return h[:n]
 }
 
 // offsetWriter は *os.File の WriteAt をシーケンシャルな io.Writer として提供する。
