@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"time"
 )
@@ -31,8 +32,14 @@ func DiscoverWithConn(conn *net.UDPConn, stunServer string) (string, error) {
 	}
 	req := buildReq(txID)
 
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	defer conn.SetDeadline(time.Time{}) //nolint:errcheck
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Printf("STUN: SetDeadline: %v", err)
+	}
+	defer func() {
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			log.Printf("STUN: reset deadline: %v", err)
+		}
+	}()
 
 	if _, err := conn.WriteToUDP(req, raddr); err != nil {
 		return "", fmt.Errorf("STUN write: %w", err)
@@ -70,7 +77,9 @@ func DiscoverExternalIP(stunServer string) (net.IP, error) {
 		return nil, fmt.Errorf("STUN dial: %w", err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Printf("STUN: SetDeadline: %v", err)
+	}
 
 	var txID [12]byte
 	rand.Read(txID[:]) //nolint:errcheck

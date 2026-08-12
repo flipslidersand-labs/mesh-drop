@@ -79,9 +79,8 @@ func ListenPipe(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
-	// pipe モードでは dispatch を使わず直接受信
-	// (ListenPipe は --pipe フラグ明示時のみ呼ばれるため meta 検証は省略)
-	return doReceivePipeConn(ctx, conn)
+	// dispatchConn 経由で Meta 検証と TOFU 検証を行う
+	return dispatchConn(ctx, conn)
 }
 
 // ListenPipeNAT は NAT Traversal 済みソケットで受信して stdout に書く。
@@ -99,7 +98,7 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
-	return doReceivePipeConn(ctx, conn)
+	return dispatchConn(ctx, conn)
 }
 
 // doReceivePipeConn は Meta 解析済みの接続からパイプデータを stdout へ書く。
