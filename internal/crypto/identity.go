@@ -43,9 +43,19 @@ func LoadOrCreateIdentity(dir string) (noise.DHKey, error) {
 	return key, nil
 }
 
-// Fingerprint returns a short hex representation of a public key for display.
-// Uses the first 16 bytes (32 hex chars) grouped as XX:XX:...:XX.
-func Fingerprint(pub []byte) string {
+// FingerprintKey returns the stable TOFU storage key for a public key:
+// full 64-char lowercase hex of all 32 bytes.
+// エンコード変更による既知ピア再登録を防ぐため、生バイトを直接エンコードする。
+func FingerprintKey(pub []byte) string {
+	if len(pub) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(pub)
+}
+
+// FingerprintShort returns a human-readable abbreviated fingerprint for display:
+// first 16 bytes as XX:XX:...:XX (32 hex chars + 15 colons = 47 chars).
+func FingerprintShort(pub []byte) string {
 	if len(pub) == 0 {
 		return "<unknown>"
 	}
@@ -54,7 +64,6 @@ func Fingerprint(pub []byte) string {
 		n = len(pub)
 	}
 	raw := hex.EncodeToString(pub[:n])
-	// group as pairs separated by colons: XX:XX:XX:...
 	out := make([]byte, n*3-1)
 	for i := 0; i < n; i++ {
 		out[i*3] = raw[i*2]
@@ -64,4 +73,10 @@ func Fingerprint(pub []byte) string {
 		}
 	}
 	return string(out)
+}
+
+// Fingerprint is an alias for FingerprintShort (display use only).
+// TOFU ストレージには FingerprintKey を使うこと。
+func Fingerprint(pub []byte) string {
+	return FingerprintShort(pub)
 }
