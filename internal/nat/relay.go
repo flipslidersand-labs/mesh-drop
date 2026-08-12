@@ -63,14 +63,21 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	code := randomCode(6)
 	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 
+	// コード生成・上限チェック・挿入をロック内で行い、重複コードの上書きを防ぐ。
 	s.mu.Lock()
 	if len(s.sessions) >= maxSessions {
 		s.mu.Unlock()
 		http.Error(w, "too many sessions", http.StatusServiceUnavailable)
 		return
+	}
+	var code string
+	for {
+		code = randomCode(6)
+		if _, exists := s.sessions[code]; !exists {
+			break
+		}
 	}
 	s.sessions[code] = sess
 	s.mu.Unlock()
