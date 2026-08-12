@@ -12,7 +12,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
 )
 
 // プロトコル概要:
@@ -83,7 +82,7 @@ func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
 // シングルファイルモードでは制御ストリームで ResumeState を返送してから受信する。
 func dispatchConn(ctx context.Context, conn *quic.Conn) error {
-	meta, cp, err := acceptMetaDispatch(ctx, conn)
+	meta, cp, peerKey, err := acceptMetaDispatch(ctx, conn)
 	if err != nil {
 		conn.CloseWithError(1, "meta error")
 		return fmt.Errorf("control stream: %w", err)
@@ -92,38 +91,39 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, ".")
+		return doReceiveDir(ctx, conn, meta, ".", peerKey)
 	default:
-		return doReceiveFileResume(ctx, conn, meta, cp)
+		return doReceiveFileResume(ctx, conn, meta, cp, peerKey)
 	}
 }
 
 // acceptMetaDispatch は制御ストリームで Meta を受信する。
 // シングルファイルのとき、チェックポイントを確認して ResumeState を送信側へ返す。
 // 制御ストリームには永続 identity + TOFU 検証を使用する。
-func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint, error) {
+// 返す []byte はピアの静的公開鍵（チャンクストリームの同一ピア検証に使う）。
+func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint, []byte, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
-		return Meta{}, nil, err
+		return Meta{}, nil, nil, err
 	}
 	defer stream.Close()
 
-	ns, err := controlHandshakeResponder(stream)
+	ns, peerKey, err := controlHandshakeResponder(stream)
 	if err != nil {
-		return Meta{}, nil, err
+		return Meta{}, nil, nil, err
 	}
 
 	meta, err := readMeta(ns)
 	if err != nil {
-		return Meta{}, nil, err
+		return Meta{}, nil, nil, err
 	}
 
 	if !meta.IsPipe && meta.Chunks < 1 {
-		return Meta{}, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
+		return Meta{}, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
 	if meta.IsPipe || meta.IsBatch {
-		return meta, nil, nil
+		return meta, nil, peerKey, nil
 	}
 
 	// シングルファイル: チェックポイントから ResumeState を返送
@@ -132,13 +132,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
 
-	return meta, cp, nil
-}
-
-// acceptMeta は Meta のみを受信する（pipe/batch の Listen* 直接呼び出し用）。
-func acceptMeta(ctx context.Context, conn *quic.Conn) (Meta, error) {
-	meta, _, err := acceptMetaDispatch(ctx, conn)
-	return meta, err
+	return meta, cp, peerKey, nil
 }
 
 // --- single file send ---
@@ -177,7 +171,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		Hash:   hash,
 		Chunks: nChunks,
 	}
-	rs, err := sendMetaGetResume(ctx, conn, meta)
+	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
@@ -217,7 +211,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar)
+			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar, peerKey)
 		}(i)
 	}
 	wg.Wait()
@@ -235,40 +229,43 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 // sendMetaGetResume は Meta を送信し、受信側から ResumeState を受け取る。
 // 受信側が ResumeState を返さない場合は空で返す（graceful degradation）。
 // 制御ストリームには永続 identity + TOFU 検証を使用する。
-func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeState, error) {
+// 返す []byte はピアの静的公開鍵（チャンクストリームの同一ピア検証に使う）。
+func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeState, []byte, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		return ResumeState{}, err
+		return ResumeState{}, nil, err
 	}
 	defer stream.Close()
 
-	ns, err := controlHandshakeInitiator(stream)
+	ns, peerKey, err := controlHandshakeInitiator(stream)
 	if err != nil {
-		return ResumeState{}, err
+		return ResumeState{}, nil, err
 	}
 
 	if err := writeMeta(ns, meta); err != nil {
-		return ResumeState{}, err
+		return ResumeState{}, nil, err
 	}
 
 	rs, err := readResumeState(ns)
 	if err != nil {
-		return ResumeState{}, nil //nolint:nilerr // 旧クライアント互換
+		return ResumeState{}, peerKey, nil //nolint:nilerr // 旧クライアント互換
 	}
-	return rs, nil
+	return rs, peerKey, nil
 }
 
 // sendMeta は Meta を送信する（dir/pipe 用: ResumeState は無視）。
-func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) error {
-	_, err := sendMetaGetResume(ctx, conn, meta)
-	return err
+// 返す []byte はピアの静的公開鍵。
+func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
+	_, peerKey, err := sendMetaGetResume(ctx, conn, meta)
+	return peerKey, err
 }
 
 // --- single file receive with resume ---
 
 // doReceiveFileResume はシングルファイルを resume 対応で受信する。
 // cp は acceptMetaDispatch で取得済みのチェックポイント。
-func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint) error {
+// peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
+func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) error {
 	defer conn.CloseWithError(0, "done")
 
 	if meta.Chunks < 1 {
@@ -332,7 +329,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar)
+			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
 			if aerr != nil {
 				errCh <- aerr
 				return
@@ -372,24 +369,20 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 }
 
 // doReceiveFile は旧互換（resume なし）でシングルファイルを受信する。
-func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta) error {
-	return doReceiveFileResume(ctx, conn, meta, nil)
+func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []byte) error {
+	return doReceiveFileResume(ctx, conn, meta, nil, peerKey)
 }
 
 // --- stream helpers ---
 
-func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int, offset, size int64, bar io.Writer) error {
+func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return err
-	}
-	ns, err := crypto.HandshakeInitiator(stream, key)
+	ns, err := chunkHandshakeInitiator(stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk %d noise: %w", index, err)
 	}
@@ -431,18 +424,15 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 }
 
 // acceptChunkWithMeta はチャンクを受信し ChunkMeta を返す（resume でのインデックス記録用）。
-func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer) (ChunkMeta, error) {
+// peerKey は制御ストリームで確認したピアの静的公開鍵。
+func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) (ChunkMeta, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("accept chunk stream: %w", err)
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return ChunkMeta{}, err
-	}
-	ns, err := crypto.HandshakeResponder(stream, key)
+	ns, err := chunkHandshakeResponder(stream, peerKey)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk noise: %w", err)
 	}
@@ -461,7 +451,7 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 }
 
 // acceptChunk は旧互換（dir.go 等から呼ばれる）。
-func acceptChunk(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer) error {
-	_, err := acceptChunkWithMeta(ctx, conn, f, bar)
+func acceptChunk(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) error {
+	_, err := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
 	return err
 }
