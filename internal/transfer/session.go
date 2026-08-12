@@ -1,6 +1,8 @@
 package transfer
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"sync"
 
@@ -35,50 +37,88 @@ func InitSession() error {
 	return initErr
 }
 
+// localKey は sessionIdentity が設定されていればそれを、なければ ephemeral 鍵を返す。
+func localKey() (noise.DHKey, error) {
+	if len(sessionIdentity.Private) > 0 {
+		return sessionIdentity, nil
+	}
+	return crypto.GenerateKeypair()
+}
+
 // controlHandshakeInitiator は制御ストリーム用のハンドシェイクを実行する。
 // 永続 identity を使い、TOFU 検証を行う。
-func controlHandshakeInitiator(stream io.ReadWriter) (*crypto.NoiseStream, error) {
-	key := sessionIdentity
-	if len(key.Private) == 0 {
-		var err error
-		key, err = crypto.GenerateKeypair()
-		if err != nil {
-			return nil, err
-		}
+// 返す []byte はピアの静的公開鍵（チャンクストリームの検証に使う）。
+func controlHandshakeInitiator(stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	key, err := localKey()
+	if err != nil {
+		return nil, nil, err
 	}
 	ns, peerStatic, err := crypto.HandshakeInitiatorFull(stream, key)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if sessionPeers != nil && len(peerStatic) > 0 {
 		fp := crypto.Fingerprint(peerStatic)
 		if err := sessionPeers.Verify(fp); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return ns, nil
+	return ns, peerStatic, nil
 }
 
 // controlHandshakeResponder は制御ストリーム用のハンドシェイクを実行する。
 // 永続 identity を使い、TOFU 検証を行う。
-func controlHandshakeResponder(stream io.ReadWriter) (*crypto.NoiseStream, error) {
-	key := sessionIdentity
-	if len(key.Private) == 0 {
-		var err error
-		key, err = crypto.GenerateKeypair()
-		if err != nil {
-			return nil, err
-		}
+// 返す []byte はピアの静的公開鍵（チャンクストリームの検証に使う）。
+func controlHandshakeResponder(stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	key, err := localKey()
+	if err != nil {
+		return nil, nil, err
 	}
 	ns, peerStatic, err := crypto.HandshakeResponderFull(stream, key)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if sessionPeers != nil && len(peerStatic) > 0 {
 		fp := crypto.Fingerprint(peerStatic)
 		if err := sessionPeers.Verify(fp); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+	}
+	return ns, peerStatic, nil
+}
+
+// chunkHandshakeInitiator はデータチャンクストリーム用ハンドシェイクを実行する。
+// sessionIdentity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
+// expectedPeer が空のとき（InitSession 失敗など）は検証をスキップする。
+func chunkHandshakeInitiator(stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	key, err := localKey()
+	if err != nil {
+		return nil, err
+	}
+	ns, peerKey, err := crypto.HandshakeInitiatorFull(stream, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(expectedPeer) > 0 && !bytes.Equal(peerKey, expectedPeer) {
+		return nil, fmt.Errorf("chunk stream: peer key mismatch")
+	}
+	return ns, nil
+}
+
+// chunkHandshakeResponder はデータチャンクストリーム用ハンドシェイクを実行する。
+// sessionIdentity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
+// expectedPeer が空のとき（InitSession 失敗など）は検証をスキップする。
+func chunkHandshakeResponder(stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	key, err := localKey()
+	if err != nil {
+		return nil, err
+	}
+	ns, peerKey, err := crypto.HandshakeResponderFull(stream, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(expectedPeer) > 0 && !bytes.Equal(peerKey, expectedPeer) {
+		return nil, fmt.Errorf("chunk stream: peer key mismatch")
 	}
 	return ns, nil
 }

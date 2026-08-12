@@ -12,8 +12,6 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
-
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
 )
 
 type fileHandle struct {
@@ -153,7 +151,8 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		Files:   files,
 		IsBatch: true,
 	}
-	if err := sendMeta(ctx, conn, meta); err != nil {
+	peerKey, err := sendMeta(ctx, conn, meta)
+	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
@@ -166,7 +165,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 			defer wg.Done()
 			f := files[a.fileIndex]
 			absPath := filepath.Join(dirPath, f.Path)
-			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar)
+			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey)
 		}(i, a)
 	}
 	wg.Wait()
@@ -182,18 +181,14 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	return nil
 }
 
-func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer) error {
+func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return err
-	}
-	ns, err := crypto.HandshakeInitiator(stream, key)
+	ns, err := chunkHandshakeInitiator(stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk %d noise: %w", idx, err)
 	}
@@ -216,7 +211,8 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 }
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
-func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string) error {
+// peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
+func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte) error {
 	if conn != nil {
 		defer conn.CloseWithError(0, "done")
 	}
@@ -275,7 +271,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- acceptDirChunk(ctx, conn, handles, bar)
+			errCh <- acceptDirChunk(ctx, conn, handles, bar, peerKey)
 		}()
 	}
 	wg.Wait()
@@ -314,18 +310,14 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	return nil
 }
 
-func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer) error {
+func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer, peerKey []byte) error {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return fmt.Errorf("accept chunk stream: %w", err)
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return err
-	}
-	ns, err := crypto.HandshakeResponder(stream, key)
+	ns, err := chunkHandshakeResponder(stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk noise: %w", err)
 	}

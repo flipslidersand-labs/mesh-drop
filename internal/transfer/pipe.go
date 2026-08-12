@@ -35,7 +35,7 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 	defer conn.CloseWithError(0, "done")
 
 	meta := Meta{Name: "stdin", Size: -1, Chunks: 1, IsPipe: true}
-	if err := sendMeta(ctx, conn, meta); err != nil {
+	if _, err := sendMeta(ctx, conn, meta); err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
