@@ -100,6 +100,7 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 
 // acceptMetaDispatch は制御ストリームで Meta を受信する。
 // シングルファイルのとき、チェックポイントを確認して ResumeState を送信側へ返す。
+// 制御ストリームには永続 identity + TOFU 検証を使用する。
 func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
@@ -107,11 +108,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return Meta{}, nil, err
-	}
-	ns, err := crypto.HandshakeResponder(stream, key)
+	ns, err := controlHandshakeResponder(stream)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -235,6 +232,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 
 // sendMetaGetResume は Meta を送信し、受信側から ResumeState を受け取る。
 // 受信側が ResumeState を返さない場合は空で返す（graceful degradation）。
+// 制御ストリームには永続 identity + TOFU 検証を使用する。
 func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeState, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -242,11 +240,7 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return ResumeState{}, err
-	}
-	ns, err := crypto.HandshakeInitiator(stream, key)
+	ns, err := controlHandshakeInitiator(stream)
 	if err != nil {
 		return ResumeState{}, err
 	}
