@@ -216,12 +216,24 @@ func Rendezvous(relayURL, code, myAddr string) (string, error) {
 
 func randomCode(n int) string {
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
+	// rejection sampling でモジュロバイアスを排除する。
+	// 256 % 36 = 4 なのでバイト値 252-255 を棄却することで均一分布を保証する。
+	const maxAccepted = byte(len(alpha) * (256 / len(alpha))) // = 252
+	out := make([]byte, 0, n)
+	buf := make([]byte, n+8) // 棄却分の余裕
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			panic(err)
+		}
+		for _, v := range buf {
+			if len(out) == n {
+				break
+			}
+			if v >= maxAccepted {
+				continue
+			}
+			out = append(out, alpha[int(v)%len(alpha)])
+		}
 	}
-	for i, v := range b {
-		b[i] = alpha[int(v)%len(alpha)]
-	}
-	return string(b)
+	return string(out)
 }

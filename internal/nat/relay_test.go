@@ -131,3 +131,23 @@ func TestRandomCode(t *testing.T) {
 		}
 	}
 }
+
+// TestRandomCodeDistribution は全 36 文字が出現することを確認する。
+// モジュロバイアス修正で一部文字が永久に出現しない、といった退行を検出するための煙幕テスト。
+func TestRandomCodeDistribution(t *testing.T) {
+	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	seen := make(map[rune]bool)
+	for i := 0; i < 5000; i++ {
+		for _, c := range randomCode(6) {
+			seen[c] = true
+		}
+		if len(seen) == len(alpha) {
+			break
+		}
+	}
+	for _, c := range alpha {
+		if !seen[c] {
+			t.Errorf("char %q never appeared in 5000 codes — possible distribution issue", c)
+		}
+	}
+}
