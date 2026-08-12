@@ -97,7 +97,7 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	}
 	switch {
 	case meta.IsPipe:
-		return doReceivePipeConn(ctx, conn)
+		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
 		return doReceiveDir(ctx, conn, meta, ".", peerKey)
 	default:

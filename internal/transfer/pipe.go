@@ -98,7 +98,8 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 
 // doReceivePipeConn は Meta 解析済みの接続からパイプデータを stdout へ書く。
 // dispatchConn から IsPipe=true のとき呼ばれる。
-func doReceivePipeConn(ctx context.Context, conn *quic.Conn) error {
+// peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
+func doReceivePipeConn(ctx context.Context, conn *quic.Conn, peerKey []byte) error {
 	defer conn.CloseWithError(0, "done")
 
 	stream, err := conn.AcceptStream(ctx)
@@ -107,7 +108,7 @@ func doReceivePipeConn(ctx context.Context, conn *quic.Conn) error {
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeResponder(stream, nil)
+	ns, err := chunkHandshakeResponder(stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("pipe noise: %w", err)
 	}
