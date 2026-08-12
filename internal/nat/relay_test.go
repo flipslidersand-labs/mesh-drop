@@ -132,6 +132,39 @@ func TestRandomCode(t *testing.T) {
 	}
 }
 
+func TestRelayJoinRateLimit(t *testing.T) {
+	srv := NewRelayServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	code, err := CreateSession(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// rateMaxJoin 回まではセッション not found (404) で返す — レート制限ではない
+	for i := 0; i < rateMaxJoin; i++ {
+		resp, err := http.Post(ts.URL+"/session/ZZZZZZ", "text/plain", strings.NewReader("1.2.3.4:9999"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("rate limit triggered too early at request %d", i+1)
+		}
+	}
+
+	// rateMaxJoin+1 回目は 429
+	resp, err := http.Post(ts.URL+"/session/"+code, "text/plain", strings.NewReader("1.2.3.4:9999"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected 429 after rate limit, got %d", resp.StatusCode)
+	}
+}
+
 // TestRandomCodeDistribution は全 36 文字が出現することを確認する。
 // モジュロバイアス修正で一部文字が永久に出現しない、といった退行を検出するための煙幕テスト。
 func TestRandomCodeDistribution(t *testing.T) {

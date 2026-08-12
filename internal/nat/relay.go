@@ -19,6 +19,13 @@ import (
 type RelayServer struct {
 	mu       sync.Mutex
 	sessions map[string]*rdv
+	ipRate   map[string]*ipBucket // handleJoin の IP ベースレート制限
+}
+
+// ipBucket は IP ごとのスライディングウィンドウカウンタ。
+type ipBucket struct {
+	count int
+	since time.Time
 }
 
 // maxSessions はメモリ枯渇防止のためのセッション数上限。
@@ -28,6 +35,13 @@ const maxSessions = 10_000
 // handleJoin 内の long-poll タイムアウト (60s) より余裕を持たせる。
 const sessionTTL = 70 * time.Second
 
+// rateWindow / rateMaxJoin はコード総当たり攻撃を緩和するレート制限定数。
+// 1 分間に rateMaxJoin 回を超えた handleJoin リクエストを 429 で拒否する。
+const (
+	rateWindow   = time.Minute
+	rateMaxJoin  = 20
+)
+
 type rdv struct {
 	mu    sync.Mutex  // addrA の読み書きを保護する
 	addrA string      // 最初に登録したピア (受信側)
@@ -36,7 +50,23 @@ type rdv struct {
 }
 
 func NewRelayServer() *RelayServer {
-	return &RelayServer{sessions: make(map[string]*rdv)}
+	return &RelayServer{
+		sessions: make(map[string]*rdv),
+		ipRate:   make(map[string]*ipBucket),
+	}
+}
+
+// allowJoin は IP ごとのレート制限を確認する。制限内なら true を返す。
+// mu を保持して呼び出すこと。
+func (s *RelayServer) allowJoin(ip string) bool {
+	now := time.Now()
+	b, ok := s.ipRate[ip]
+	if !ok || now.Sub(b.since) >= rateWindow {
+		s.ipRate[ip] = &ipBucket{count: 1, since: now}
+		return true
+	}
+	b.count++
+	return b.count <= rateMaxJoin
 }
 
 func (s *RelayServer) Handler() http.Handler {
@@ -102,6 +132,17 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// IP ベースのレート制限: コード総当たり攻撃を緩和する。
+	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.mu.Lock()
+	allowed := s.allowJoin(remoteIP)
+	s.mu.Unlock()
+	if !allowed {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+
 	code := strings.TrimPrefix(r.URL.Path, "/session/")
 	// 64 バイト上限: IPv6 アドレス最大長 ([xxxx:...:xxxx]:65535) は約 47 文字で収まる
 	const maxAddrLen = 64
