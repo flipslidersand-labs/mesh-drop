@@ -148,19 +148,15 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 	if err != nil {
 		return err
 	}
+	defer f.Close()
+
 	info, err := f.Stat()
-	f.Close()
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("Hashing %s ...\n", filepath.Base(filePath))
-	fh, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	hash, err := hashReader(fh)
-	fh.Close()
+	hash, err := hashReader(f)
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
 	}
