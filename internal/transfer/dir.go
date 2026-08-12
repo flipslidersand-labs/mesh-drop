@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/quic-go/quic-go"
@@ -220,17 +221,33 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
 		meta.Name, len(meta.Files), totalSize, meta.Chunks)
 
+	// outDir を絶対パスに確定してパストラバーサル検証の基準にする。
+	absBase, err := filepath.Abs(outDir)
+	if err != nil {
+		return fmt.Errorf("resolve outDir: %w", err)
+	}
+
 	// 出力ファイルを事前に確保
 	handles := make([]fileHandle, len(meta.Files))
 	for i, fm := range meta.Files {
-		outPath := filepath.Join(outDir, fm.Path)
-		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		outPath := filepath.Join(absBase, fm.Path)
+		absOut, err := filepath.Abs(outPath)
+		if err != nil {
+			return fmt.Errorf("resolve path %s: %w", fm.Path, err)
+		}
+		if !strings.HasPrefix(absOut, absBase+string(os.PathSeparator)) {
+			for _, h := range handles[:i] {
+				h.f.Close()
+			}
+			return fmt.Errorf("path traversal detected: %s", fm.Path)
+		}
+		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
 			for _, h := range handles[:i] {
 				h.f.Close()
 			}
 			return err
 		}
-		f, err := os.Create(outPath)
+		f, err := os.Create(absOut)
 		if err != nil {
 			for _, h := range handles[:i] {
 				h.f.Close()
@@ -244,7 +261,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 			}
 			return err
 		}
-		handles[i] = fileHandle{f: f, path: outPath}
+		handles[i] = fileHandle{f: f, path: absOut}
 	}
 
 	bar := progressbar.DefaultBytes(totalSize, "receiving")
