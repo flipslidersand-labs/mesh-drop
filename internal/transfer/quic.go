@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
-
 )
 
 // プロトコル概要:
@@ -79,12 +79,20 @@ func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
 	return dispatchConn(ctx, conn)
 }
 
+// appErrCodeTOFU は TOFU 検証失敗時に送信側へ通知する QUIC アプリケーションエラーコード。
+// 送信側はこのコードを見てエラーを伝播させる（旧クライアント互換の graceful degradation とは区別）。
+const appErrCodeTOFU quic.ApplicationErrorCode = 2
+
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
 // シングルファイルモードでは制御ストリームで ResumeState を返送してから受信する。
 func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	meta, cp, peerKey, err := acceptMetaDispatch(ctx, conn)
 	if err != nil {
-		conn.CloseWithError(1, "meta error")
+		code := quic.ApplicationErrorCode(1)
+		if errors.Is(err, errTOFURejected) {
+			code = appErrCodeTOFU
+		}
+		conn.CloseWithError(code, err.Error()) //nolint:errcheck
 		return fmt.Errorf("control stream: %w", err)
 	}
 	switch {
@@ -248,7 +256,17 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 
 	rs, err := readResumeState(ns)
 	if err != nil {
-		return ResumeState{}, peerKey, nil //nolint:nilerr // 旧クライアント互換
+		// ストリームが graceful に閉じられた場合 (io.EOF/io.ErrUnexpectedEOF) は
+		// 旧クライアント互換として resume state なしで継続する。
+		// それ以外 (QUIC ApplicationError など) はピアによる明示的な拒否なので伝播する。
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return ResumeState{}, peerKey, nil
+		}
+		var appErr *quic.ApplicationError
+		if errors.As(err, &appErr) {
+			return ResumeState{}, nil, fmt.Errorf("peer rejected connection (code %d): %s", appErr.ErrorCode, appErr.ErrorMessage)
+		}
+		return ResumeState{}, nil, fmt.Errorf("reading resume state: %w", err)
 	}
 	return rs, peerKey, nil
 }
