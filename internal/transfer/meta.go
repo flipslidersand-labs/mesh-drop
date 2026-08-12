@@ -57,6 +57,14 @@ func writeResumeState(w io.Writer, rs ResumeState) error {
 
 const maxMetaLength = 1 << 20 // 1 MiB
 
+// 受信側で強制するサニティ上限。送信側は正常値しか生成しないが、
+// ネットワーク越しに受け取る値なので範囲を制限する。
+const (
+	maxFileSize  = int64(1) << 40 // 1 TiB
+	maxFileCount = 100_000
+	maxChunks    = 65_536
+)
+
 func readResumeState(r io.Reader) (ResumeState, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -126,5 +134,24 @@ func readMeta(r io.Reader) (Meta, error) {
 		return Meta{}, err
 	}
 	var m Meta
-	return m, json.Unmarshal(buf, &m)
+	if err := json.Unmarshal(buf, &m); err != nil {
+		return Meta{}, err
+	}
+	if !m.IsPipe {
+		if m.Size < 0 || m.Size > maxFileSize {
+			return Meta{}, fmt.Errorf("meta.Size out of range: %d", m.Size)
+		}
+		if m.Chunks < 1 || m.Chunks > maxChunks {
+			return Meta{}, fmt.Errorf("meta.Chunks out of range: %d", m.Chunks)
+		}
+	}
+	if len(m.Files) > maxFileCount {
+		return Meta{}, fmt.Errorf("too many files: %d (max %d)", len(m.Files), maxFileCount)
+	}
+	for i, f := range m.Files {
+		if f.Size < 0 || f.Size > maxFileSize {
+			return Meta{}, fmt.Errorf("files[%d].Size out of range: %d", i, f.Size)
+		}
+	}
+	return m, nil
 }

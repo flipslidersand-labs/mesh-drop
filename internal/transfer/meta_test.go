@@ -6,7 +6,7 @@ import (
 )
 
 func TestMetaRoundtrip(t *testing.T) {
-	original := Meta{Name: "video.mp4", Size: 1234567890}
+	original := Meta{Name: "video.mp4", Size: 1234567890, Chunks: 1}
 
 	var buf bytes.Buffer
 	if err := writeMeta(&buf, original); err != nil {
@@ -31,7 +31,7 @@ func TestMetaRoundtrip(t *testing.T) {
 }
 
 func TestMetaRoundtrip_UnicodeFilename(t *testing.T) {
-	original := Meta{Name: "テスト動画.mp4", Size: 42}
+	original := Meta{Name: "テスト動画.mp4", Size: 42, Chunks: 1}
 
 	var buf bytes.Buffer
 	if err := writeMeta(&buf, original); err != nil {

@@ -451,6 +451,9 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
 	}
+	if cm.Offset < 0 || cm.Size < 0 {
+		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
 
 	ow := &offsetWriter{f: f, off: cm.Offset}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)

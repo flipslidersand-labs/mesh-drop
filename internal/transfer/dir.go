@@ -334,6 +334,9 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
 		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
 	}
+	if cm.Offset < 0 || cm.Size < 0 {
+		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
