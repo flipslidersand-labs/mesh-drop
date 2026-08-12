@@ -8,8 +8,6 @@ import (
 	"os"
 
 	"github.com/quic-go/quic-go"
-
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
 )
 
 // SendPipe は os.Stdin を QUIC ストリームで送信する。
@@ -35,7 +33,8 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 	defer conn.CloseWithError(0, "done")
 
 	meta := Meta{Name: "stdin", Size: -1, Chunks: 1, IsPipe: true}
-	if _, err := sendMeta(ctx, conn, meta); err != nil {
+	peerKey, err := sendMeta(ctx, conn, meta)
+	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
@@ -45,11 +44,7 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return err
-	}
-	ns, err := crypto.HandshakeInitiator(stream, key)
+	ns, err := chunkHandshakeInitiator(stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("pipe noise: %w", err)
 	}
@@ -112,11 +107,7 @@ func doReceivePipeConn(ctx context.Context, conn *quic.Conn) error {
 	}
 	defer stream.Close()
 
-	key, err := crypto.GenerateKeypair()
-	if err != nil {
-		return err
-	}
-	ns, err := crypto.HandshakeResponder(stream, key)
+	ns, err := chunkHandshakeResponder(stream, nil)
 	if err != nil {
 		return fmt.Errorf("pipe noise: %w", err)
 	}

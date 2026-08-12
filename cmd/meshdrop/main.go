@@ -27,13 +27,12 @@ import (
 var allowNoTOFU bool
 
 func main() {
-	if err := initSessionOrWarn(); err != nil {
-		os.Exit(1)
-	}
-
 	root := &cobra.Command{
 		Use:   "meshdrop",
 		Short: "P2P encrypted file transfer",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initSessionOrWarn()
+		},
 	}
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
@@ -157,7 +156,7 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	fmt.Printf("QUIC listening on %s...\n", udpConn.LocalAddr())
 	if pipe {
@@ -319,7 +318,7 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) er
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	fmt.Printf("Dialing QUIC at %s...\n", peerAddr)
 	info, err := os.Stat(target)
@@ -362,7 +361,7 @@ func sendPipeNAT(ctx context.Context, relayURL, code string) error {
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	return transfer.SendPipeNAT(ctx, udpConn, peerUDP)
 }
