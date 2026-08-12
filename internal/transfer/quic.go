@@ -118,6 +118,10 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 		return Meta{}, nil, err
 	}
 
+	if !meta.IsPipe && meta.Chunks < 1 {
+		return Meta{}, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
+	}
+
 	if meta.IsPipe || meta.IsBatch {
 		return meta, nil, nil
 	}
@@ -267,6 +271,10 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) error {
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint) error {
 	defer conn.CloseWithError(0, "done")
 
+	if meta.Chunks < 1 {
+		return fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
+	}
+
 	outPath := filepath.Base(meta.Name)
 	if cp == nil {
 		cp = loadOrCreate(outPath, meta)
@@ -315,6 +323,9 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 
 	remaining := meta.Chunks - len(skipSet)
+	if remaining < 0 {
+		remaining = 0
+	}
 	errCh := make(chan error, remaining)
 	var wg sync.WaitGroup
 	for i := 0; i < remaining; i++ {
