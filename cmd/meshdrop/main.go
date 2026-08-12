@@ -22,20 +22,56 @@ import (
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
 )
 
+// allowNoTOFU はグローバルフラグ --allow-no-tofu で設定される。
+// 非対話的環境（CI/スクリプト）で TOFU なし動作を明示的に許可する。
+var allowNoTOFU bool
+
 func main() {
-	// 永続 identity と TOFU ストアを初期化する。失敗しても ephemeral モードで継続する。
-	if err := transfer.InitSession(); err != nil {
-		log.Printf("Warning: could not initialize session identity: %v (using ephemeral keys)", err)
+	if err := initSessionOrWarn(); err != nil {
+		os.Exit(1)
 	}
 
 	root := &cobra.Command{
 		Use:   "meshdrop",
 		Short: "P2P encrypted file transfer",
 	}
+	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
+		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
 	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// initSessionOrWarn は永続 identity と TOFU ストアを初期化する。
+// 失敗した場合は目立つ警告を出し、端末実行時はユーザーに確認を求める。
+// --allow-no-tofu が指定されているか非対話的環境では確認なしで継続する。
+func initSessionOrWarn() error {
+	if err := transfer.InitSession(); err == nil {
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════════════╗")
+	fmt.Fprintln(os.Stderr, "║  WARNING: TOFU peer verification is DISABLED         ║")
+	fmt.Fprintln(os.Stderr, "║  Could not load/create session identity.             ║")
+	fmt.Fprintln(os.Stderr, "║  Connections will use ephemeral keys — no MitM       ║")
+	fmt.Fprintln(os.Stderr, "║  protection. Ensure you trust your network.          ║")
+	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════════════╝")
+	fmt.Fprintln(os.Stderr, "")
+
+	// --allow-no-tofu が既に渡されているか非対話的環境では確認なしで継続
+	if allowNoTOFU || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil
+	}
+
+	fmt.Fprint(os.Stderr, "Continue without TOFU verification? [y/N]: ")
+	sc := bufio.NewScanner(os.Stdin)
+	if sc.Scan() && strings.EqualFold(strings.TrimSpace(sc.Text()), "y") {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Aborted. To skip this prompt, pass --allow-no-tofu.")
+	return fmt.Errorf("aborted: TOFU initialization failed")
 }
 
 // --- receive ---
