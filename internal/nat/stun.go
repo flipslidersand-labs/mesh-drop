@@ -82,7 +82,9 @@ func DiscoverExternalIP(stunServer string) (net.IP, error) {
 	}
 
 	var txID [12]byte
-	rand.Read(txID[:]) //nolint:errcheck
+	if _, err := rand.Read(txID[:]); err != nil {
+		return nil, err
+	}
 	if _, err := conn.Write(buildReq(txID)); err != nil {
 		return nil, fmt.Errorf("STUN write: %w", err)
 	}

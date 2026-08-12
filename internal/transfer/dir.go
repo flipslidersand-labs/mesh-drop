@@ -217,6 +217,10 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
 func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string) error {
+	if conn != nil {
+		defer conn.CloseWithError(0, "done")
+	}
+
 	totalSize := totalDirSize(meta.Files)
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
 		meta.Name, len(meta.Files), totalSize, meta.Chunks)
@@ -333,6 +337,9 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 
 	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
 		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
+	}
+	if cm.Offset < 0 || cm.Size < 0 {
+		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
