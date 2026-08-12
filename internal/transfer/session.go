@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -9,6 +10,10 @@ import (
 	"github.com/flipslidersand/mesh-drop/internal/crypto"
 	"github.com/flynn/noise"
 )
+
+// errTOFURejected はピアの公開鍵が TOFU ストアに登録されておらず拒否されたことを示す。
+// dispatchConn はこのエラーを検出して専用の QUIC エラーコードで接続を閉じる。
+var errTOFURejected = errors.New("peer rejected by TOFU store")
 
 // sessionIdentity は起動時に LoadOrCreateIdentity でロードされる永続 keypair。
 // ゼロ値の場合、制御ストリームは毎回 ephemeral 鍵を使う（TOFU なし）。
@@ -60,7 +65,7 @@ func controlHandshakeInitiator(stream io.ReadWriter) (*crypto.NoiseStream, []byt
 	if sessionPeers != nil && len(peerStatic) > 0 {
 		fp := crypto.Fingerprint(peerStatic)
 		if err := sessionPeers.Verify(fp); err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}
 	return ns, peerStatic, nil
@@ -81,7 +86,7 @@ func controlHandshakeResponder(stream io.ReadWriter) (*crypto.NoiseStream, []byt
 	if sessionPeers != nil && len(peerStatic) > 0 {
 		fp := crypto.Fingerprint(peerStatic)
 		if err := sessionPeers.Verify(fp); err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}
 	return ns, peerStatic, nil
