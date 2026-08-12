@@ -145,6 +145,10 @@ func acceptMeta(ctx context.Context, conn *quic.Conn) (Meta, error) {
 func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) error {
 	defer conn.CloseWithError(0, "done")
 
+	if nChunks < 1 {
+		return fmt.Errorf("nChunks must be >= 1, got %d", nChunks)
+	}
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -293,7 +297,11 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	if err != nil {
 		return err
 	}
-	info, _ := f.Stat()
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("stat %s: %w", outPath, err)
+	}
 	if info.Size() != meta.Size {
 		if err := f.Truncate(meta.Size); err != nil {
 			f.Close()

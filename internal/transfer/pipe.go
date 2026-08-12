@@ -95,7 +95,7 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
 	defer ln.Close()
-	conn, err := ln.Accept(context.Background())
+	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}

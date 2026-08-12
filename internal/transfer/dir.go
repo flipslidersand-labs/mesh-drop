@@ -225,14 +225,23 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	for i, fm := range meta.Files {
 		outPath := filepath.Join(outDir, fm.Path)
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+			for _, h := range handles[:i] {
+				h.f.Close()
+			}
 			return err
 		}
 		f, err := os.Create(outPath)
 		if err != nil {
+			for _, h := range handles[:i] {
+				h.f.Close()
+			}
 			return err
 		}
 		if err := f.Truncate(fm.Size); err != nil {
 			f.Close()
+			for _, h := range handles[:i] {
+				h.f.Close()
+			}
 			return err
 		}
 		handles[i] = fileHandle{f: f, path: outPath}
@@ -303,6 +312,10 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	cm, err := readChunkMeta(ns)
 	if err != nil {
 		return fmt.Errorf("chunk meta: %w", err)
+	}
+
+	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
+		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}

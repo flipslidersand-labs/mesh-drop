@@ -3,6 +3,7 @@ package transfer
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -54,10 +55,15 @@ func writeResumeState(w io.Writer, rs ResumeState) error {
 	return err
 }
 
+const maxMetaLength = 1 << 20 // 1 MiB
+
 func readResumeState(r io.Reader) (ResumeState, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 		return ResumeState{}, err
+	}
+	if length > maxMetaLength {
+		return ResumeState{}, fmt.Errorf("resume state too large: %d bytes", length)
 	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
@@ -96,6 +102,9 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 		return ChunkMeta{}, err
 	}
+	if length > maxMetaLength {
+		return ChunkMeta{}, fmt.Errorf("chunk meta too large: %d bytes", length)
+	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return ChunkMeta{}, err
@@ -108,6 +117,9 @@ func readMeta(r io.Reader) (Meta, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 		return Meta{}, err
+	}
+	if length > maxMetaLength {
+		return Meta{}, fmt.Errorf("meta too large: %d bytes", length)
 	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {

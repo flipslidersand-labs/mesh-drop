@@ -88,12 +88,17 @@ func (cp *checkpoint) markDone(idx int) error {
 }
 
 // save は状態ファイルに書き出す（ロック取得済みで呼ぶこと）。
+// クラッシュ時の破損を防ぐため tmp ファイルへ書いてから rename する。
 func (cp *checkpoint) save() error {
 	data, err := json.Marshal(cp.state)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cp.path, data, 0o600)
+	tmp := cp.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, cp.path)
 }
 
 // finish は転送完了時に状態ファイルを削除する。
