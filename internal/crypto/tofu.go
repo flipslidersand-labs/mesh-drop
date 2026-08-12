@@ -40,12 +40,13 @@ func (kp *KnownPeers) Verify(pub []byte) error {
 	}
 
 	kp.mu.Lock()
-	defer kp.mu.Unlock()
-
-	if _, ok := kp.cache[key]; ok {
+	_, known := kp.cache[key]
+	kp.mu.Unlock()
+	if known {
 		return nil
 	}
 
+	// ロックを持たずに stdin を読む（デッドロック防止）
 	fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", FingerprintShort(pub))
 	fmt.Fprintf(os.Stderr, "Trust this peer? [y/N]: ")
 
@@ -58,6 +59,12 @@ func (kp *KnownPeers) Verify(pub []byte) error {
 		return fmt.Errorf("peer not trusted: %s", FingerprintShort(pub))
 	}
 
+	// 再ロックして書き込む。並走した別goroutineが先に書いていれば何もしない。
+	kp.mu.Lock()
+	defer kp.mu.Unlock()
+	if _, ok := kp.cache[key]; ok {
+		return nil
+	}
 	if err := kp.appendFile(key); err != nil {
 		return err
 	}
