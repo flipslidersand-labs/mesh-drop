@@ -62,11 +62,17 @@ func (s *RelayServer) allowJoin(ip string) bool {
 	now := time.Now()
 	b, ok := s.ipRate[ip]
 	if !ok || now.Sub(b.since) >= rateWindow {
+		// 期限切れエントリを削除してから新規登録することでメモリリークを防ぐ。
+		delete(s.ipRate, ip)
 		s.ipRate[ip] = &ipBucket{count: 1, since: now}
 		return true
 	}
+	// インクリメント前にチェックして固定ウィンドウ境界でのバーストを防ぐ。
+	if b.count >= rateMaxJoin {
+		return false
+	}
 	b.count++
-	return b.count <= rateMaxJoin
+	return true
 }
 
 func (s *RelayServer) Handler() http.Handler {
@@ -134,7 +140,11 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// IP ベースのレート制限: コード総当たり攻撃を緩和する。
-	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// 解析失敗時はアドレス全体をキーとして使い、空文字列バケット共有を防ぐ。
+		remoteIP = r.RemoteAddr
+	}
 	s.mu.Lock()
 	allowed := s.allowJoin(remoteIP)
 	s.mu.Unlock()

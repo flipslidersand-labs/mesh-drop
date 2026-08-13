@@ -82,9 +82,11 @@ func cmdReceive() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "receive",
 		Short: "Receive a file/directory (LAN mDNS, or --relay for NAT traversal)",
-		// PersistentPreRunE を明示登録。cobra v1 は子が独自 PersistentPreRunE を持つと
-		// 親の hook を自動チェーンしないため、TOFU 初期化を各サブコマンドで管理する。
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// PreRunE でこのコマンド自身に TOFU 初期化を紐付ける。
+		// PersistentPreRunE は子コマンドに伝播するため、将来の子コマンドが独自の
+		// PersistentPreRunE を定義すると cobra v1 がチェーンせず initSessionOrWarn が
+		// 無音スキップされる。リーフコマンドには PreRunE が適切。
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -182,9 +184,11 @@ func cmdSend() *cobra.Command {
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
 		Args:  cobra.MaximumNArgs(1),
-		// PersistentPreRunE を明示登録。cobra v1 は子が独自 PersistentPreRunE を持つと
-		// 親の hook を自動チェーンしないため、TOFU 初期化を各サブコマンドで管理する。
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// PreRunE でこのコマンド自身に TOFU 初期化を紐付ける。
+		// PersistentPreRunE は子コマンドに伝播するため、将来の子コマンドが独自の
+		// PersistentPreRunE を定義すると cobra v1 がチェーンせず initSessionOrWarn が
+		// 無音スキップされる。リーフコマンドには PreRunE が適切。
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
