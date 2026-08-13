@@ -229,10 +229,12 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 
 	// 出力ファイルを事前に確保
 	handles := make([]fileHandle, len(meta.Files))
+	closed := make([]bool, len(meta.Files))
 	defer func() {
 		if retErr != nil {
-			for _, h := range handles {
-				if h.f != nil {
+			// エラー時：未クローズのファイルを close して削除
+			for i, h := range handles {
+				if !closed[i] && h.f != nil {
 					h.f.Close()
 				}
 				if h.path != "" {
@@ -279,7 +281,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 
 	for i := range handles {
 		handles[i].f.Close()
-		handles[i].f = nil // nil out so the error-cleanup defer skips already-closed handles
+		closed[i] = true
 	}
 
 	for e := range errCh {
@@ -333,8 +335,11 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if cm.Offset < 0 || cm.Size < 0 {
 		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
 	}
-	if cm.Offset+cm.Size < 0 { // overflow check
-		return fmt.Errorf("chunk %d: offset+size overflow", cm.Index)
+	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
+		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
+			return fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
+				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
+		}
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}

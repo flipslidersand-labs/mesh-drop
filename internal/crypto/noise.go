@@ -64,6 +64,10 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	}
 	size := int(binary.BigEndian.Uint16(lb[:]))
 	bufPtr := noiseReadPool.Get().(*[]byte)
+	if size > len(*bufPtr) {
+		noiseReadPool.Put(bufPtr)
+		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*bufPtr))
+	}
 	ct := (*bufPtr)[:size]
 	if _, err := io.ReadFull(s.rw, ct); err != nil {
 		noiseReadPool.Put(bufPtr)
