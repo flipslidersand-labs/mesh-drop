@@ -11,7 +11,7 @@ permissions:
 jobs:
   release:
     name: build & release
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
         include:
