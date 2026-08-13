@@ -30,9 +30,6 @@ func main() {
 	root := &cobra.Command{
 		Use:   "meshdrop",
 		Short: "P2P encrypted file transfer",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return initSessionOrWarn()
-		},
 	}
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
@@ -66,8 +63,11 @@ func initSessionOrWarn() error {
 
 	fmt.Fprint(os.Stderr, "Continue without TOFU verification? [y/N]: ")
 	sc := bufio.NewScanner(os.Stdin)
-	if sc.Scan() && strings.EqualFold(strings.TrimSpace(sc.Text()), "y") {
-		return nil
+	if sc.Scan() {
+		answer := strings.ToLower(strings.TrimSpace(sc.Text()))
+		if answer == "y" || answer == "yes" {
+			return nil
+		}
 	}
 	fmt.Fprintln(os.Stderr, "Aborted. To skip this prompt, pass --allow-no-tofu.")
 	return fmt.Errorf("aborted: TOFU initialization failed")
@@ -82,6 +82,11 @@ func cmdReceive() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "receive",
 		Short: "Receive a file/directory (LAN mDNS, or --relay for NAT traversal)",
+		// PersistentPreRunE を明示登録。cobra v1 は子が独自 PersistentPreRunE を持つと
+		// 親の hook を自動チェーンしないため、TOFU 初期化を各サブコマンドで管理する。
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initSessionOrWarn()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
@@ -177,6 +182,11 @@ func cmdSend() *cobra.Command {
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
 		Args:  cobra.MaximumNArgs(1),
+		// PersistentPreRunE を明示登録。cobra v1 は子が独自 PersistentPreRunE を持つと
+		// 親の hook を自動チェーンしないため、TOFU 初期化を各サブコマンドで管理する。
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initSessionOrWarn()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
