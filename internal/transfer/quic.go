@@ -135,6 +135,9 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 	}
 
 	// シングルファイル: チェックポイントから ResumeState を返送
+	if meta.Name == "" || filepath.Base(meta.Name) == "." {
+		return Meta{}, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
+	}
 	outPath := filepath.Base(meta.Name)
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
@@ -457,6 +460,12 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	}
 	if cm.Offset < 0 || cm.Size < 0 {
 		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
+	if info, err := f.Stat(); err == nil {
+		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
+			return ChunkMeta{}, fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
+				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
+		}
 	}
 
 	ow := &offsetWriter{f: f, off: cm.Offset}
