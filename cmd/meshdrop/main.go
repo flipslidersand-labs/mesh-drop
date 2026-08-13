@@ -156,7 +156,7 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	fmt.Printf("QUIC listening on %s...\n", udpConn.LocalAddr())
 	if pipe {
@@ -318,7 +318,7 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) er
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	fmt.Printf("Dialing QUIC at %s...\n", peerAddr)
 	info, err := os.Stat(target)
@@ -361,7 +361,7 @@ func sendPipeNAT(ctx context.Context, relayURL, code string) error {
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
-	go nat.HolePunch(udpConn, peerUDP, 20, 50*time.Millisecond)
+	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	return transfer.SendPipeNAT(ctx, udpConn, peerUDP)
 }
