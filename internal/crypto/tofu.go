@@ -7,15 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // KnownPeers is a file-backed store of trusted peer fingerprints (TOFU).
 // The file contains one fingerprint per line.
 // All methods are safe for concurrent use.
 type KnownPeers struct {
-	path  string
-	mu    sync.Mutex
-	cache map[string]struct{} // 既知フィンガープリントのメモリキャッシュ
+	path     string
+	mu       sync.Mutex
+	cache    map[string]struct{} // 既知フィンガープリントのメモリキャッシュ
+	inflight singleflight.Group  // 同一鍵の Verify が並行呼び出しされた場合に1つだけ TTY プロンプトを出す
 }
 
 // NewKnownPeers creates a KnownPeers store backed by dir/known_peers.
@@ -47,37 +50,49 @@ func (kp *KnownPeers) Verify(pub []byte) error {
 		return nil
 	}
 
-	// /dev/tty を直接開いてプロンプトを表示・読み取る。
-	// stdin がパイプデータを運ぶ pipe モードでも競合しない。
-	tty, err := os.Open("/dev/tty")
-	if err != nil {
-		return fmt.Errorf("peer verification failed: no TTY available (use --allow-no-tofu to skip): %w", err)
-	}
-	defer tty.Close()
+	// 同一フィンガープリントへの並行 Verify を1つに集約する。
+	// 複数の未知ピアが同時に接続しても TTY プロンプトが混在しない。
+	_, err, _ := kp.inflight.Do(key, func() (interface{}, error) {
+		// キャッシュを再確認（別 goroutine が先に信頼登録済みの可能性）
+		kp.mu.Lock()
+		_, ok := kp.cache[key]
+		kp.mu.Unlock()
+		if ok {
+			return nil, nil
+		}
 
-	fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", FingerprintShort(pub))
-	fmt.Fprintf(os.Stderr, "Trust this peer? [y/N]: ")
+		// /dev/tty を直接開いてプロンプトを表示・読み取る。
+		// stdin がパイプデータを運ぶ pipe モードでも競合しない。
+		tty, err := os.Open("/dev/tty")
+		if err != nil {
+			return nil, fmt.Errorf("peer verification failed: no TTY available (use --allow-no-tofu to skip): %w", err)
+		}
+		defer tty.Close()
 
-	scanner := bufio.NewScanner(tty)
-	if !scanner.Scan() {
-		return fmt.Errorf("peer verification failed: could not read answer")
-	}
-	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	if answer != "y" && answer != "yes" {
-		return fmt.Errorf("peer not trusted: %s", FingerprintShort(pub))
-	}
+		fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", FingerprintShort(pub))
+		fmt.Fprintf(os.Stderr, "Trust this peer? [y/N]: ")
 
-	// 再ロックして書き込む。並走した別goroutineが先に書いていれば何もしない。
-	kp.mu.Lock()
-	defer kp.mu.Unlock()
-	if _, ok := kp.cache[key]; ok {
-		return nil
-	}
-	if err := kp.appendFile(key); err != nil {
-		return err
-	}
-	kp.cache[key] = struct{}{}
-	return nil
+		scanner := bufio.NewScanner(tty)
+		if !scanner.Scan() {
+			return nil, fmt.Errorf("peer verification failed: could not read answer")
+		}
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if answer != "y" && answer != "yes" {
+			return nil, fmt.Errorf("peer not trusted: %s", FingerprintShort(pub))
+		}
+
+		kp.mu.Lock()
+		defer kp.mu.Unlock()
+		if _, ok := kp.cache[key]; ok {
+			return nil, nil
+		}
+		if err := kp.appendFile(key); err != nil {
+			return nil, err
+		}
+		kp.cache[key] = struct{}{}
+		return nil, nil
+	})
+	return err
 }
 
 // loadCache reads the known_peers file into memory (called once at init).
