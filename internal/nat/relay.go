@@ -17,9 +17,10 @@ import (
 // 受信側が CreateSession でコードを取得し、送受信双方が Rendezvous を呼ぶと
 // 互いの外部アドレスを返す (long-poll 方式)。
 type RelayServer struct {
-	mu       sync.Mutex
-	sessions map[string]*rdv
-	ipRate   map[string]*ipBucket // handleJoin の IP ベースレート制限
+	mu             sync.Mutex
+	sessions       map[string]*rdv
+	ipRate         map[string]*ipBucket // handleJoin の IP ベースレート制限
+	trustedProxies map[string]struct{}  // X-Forwarded-For を信頼するプロキシ IP セット
 }
 
 // ipBucket は IP ごとのスライディングウィンドウカウンタ。
@@ -49,11 +50,53 @@ type rdv struct {
 	done  chan struct{} // ランデブー完了またはタイムアウトで close される
 }
 
+// NewRelayServer は信頼プロキシなしのリレーサーバーを生成する。
+// リバースプロキシ背後で動かす場合は NewRelayServerWithProxies を使うこと。
 func NewRelayServer() *RelayServer {
-	return &RelayServer{
-		sessions: make(map[string]*rdv),
-		ipRate:   make(map[string]*ipBucket),
+	return NewRelayServerWithProxies(nil)
+}
+
+// NewRelayServerWithProxies は信頼プロキシ IP リスト付きでリレーサーバーを生成する。
+// trustedProxies に含まれる IP からのリクエストは X-Forwarded-For / X-Real-IP を
+// クライアント IP として採用する。
+func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
+	tp := make(map[string]struct{}, len(trustedProxies))
+	for _, ip := range trustedProxies {
+		tp[ip] = struct{}{}
 	}
+	return &RelayServer{
+		sessions:       make(map[string]*rdv),
+		ipRate:         make(map[string]*ipBucket),
+		trustedProxies: tp,
+	}
+}
+
+// realIP はリクエストの実際のクライアント IP を返す。
+// r.RemoteAddr が trustedProxies に含まれる場合に限り
+// X-Forwarded-For / X-Real-IP を採用し、それ以外は r.RemoteAddr を使う。
+// これにより信頼できないプロキシヘッダーによる IP スプーフィングを防ぐ。
+// trustedProxies マップへのアクセスはミューテックスで保護する。
+func (s *RelayServer) realIP(r *http.Request) string {
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remote = r.RemoteAddr
+	}
+	s.mu.Lock()
+	_, trusted := s.trustedProxies[remote]
+	s.mu.Unlock()
+	if !trusted {
+		return remote
+	}
+	// X-Forwarded-For: client, proxy1, proxy2 — 最左のアドレスがクライアント
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if client := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0]); client != "" {
+			return client
+		}
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	return remote
 }
 
 // allowJoin は IP ごとのレート制限を確認する。制限内なら true を返す。
@@ -140,13 +183,10 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// IP ベースのレート制限: コード総当たり攻撃を緩和する。
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// 解析失敗時はアドレス全体をキーとして使い、空文字列バケット共有を防ぐ。
-		remoteIP = r.RemoteAddr
-	}
+	// realIP は信頼プロキシ設定に応じて X-Forwarded-For を読む。
+	clientIP := s.realIP(r)
 	s.mu.Lock()
-	allowed := s.allowJoin(remoteIP)
+	allowed := s.allowJoin(clientIP)
 	s.mu.Unlock()
 	if !allowed {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
@@ -227,7 +267,7 @@ func CreateSession(relayURL string) (string, error) {
 	}
 	defer resp.Body.Close()
 	var r map[string]string
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&r); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", fmt.Errorf("relay decode: %w", err)
 	}
 	code, ok := r["code"]
@@ -251,11 +291,11 @@ func Rendezvous(relayURL, code, myAddr string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		b, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("relay: %s", strings.TrimSpace(string(b)))
 	}
 	var r map[string]string
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&r); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", fmt.Errorf("relay decode: %w", err)
 	}
 	peer, ok := r["peer"]
