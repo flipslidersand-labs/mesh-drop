@@ -404,14 +404,21 @@ func cmdInfo() *cobra.Command {
 
 func cmdRelay() *cobra.Command {
 	var addr string
+	var trustedProxies []string
 	cmd := &cobra.Command{
 		Use:   "relay",
 		Short: "Run a signaling relay server for NAT traversal",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("Relay server on %s\n", addr)
-			return nat.NewRelayServer().Start(addr)
+			if len(trustedProxies) > 0 {
+				fmt.Printf("Relay server on %s (trusted proxies: %s)\n", addr, strings.Join(trustedProxies, ", "))
+			} else {
+				fmt.Printf("Relay server on %s\n", addr)
+			}
+			return nat.NewRelayServerWithProxies(trustedProxies).Start(addr)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address")
+	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil,
+		"IP addresses of trusted reverse proxies (enables X-Forwarded-For / X-Real-IP support)")
 	return cmd
 }

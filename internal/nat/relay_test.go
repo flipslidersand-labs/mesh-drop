@@ -184,3 +184,101 @@ func TestRandomCodeDistribution(t *testing.T) {
 		}
 	}
 }
+
+func TestRealIP_NoProxy(t *testing.T) {
+	srv := NewRelayServer()
+	r := &http.Request{
+		RemoteAddr: "1.2.3.4:9999",
+		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8"}},
+	}
+	if got := srv.realIP(r); got != "1.2.3.4" {
+		t.Errorf("realIP without trusted proxy = %q, want 1.2.3.4", got)
+	}
+}
+
+func TestRealIP_TrustedProxy_XForwardedFor(t *testing.T) {
+	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	r := &http.Request{
+		RemoteAddr: "10.0.0.1:80",
+		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8, 10.0.0.2"}},
+	}
+	if got := srv.realIP(r); got != "5.6.7.8" {
+		t.Errorf("realIP with trusted proxy XFF = %q, want 5.6.7.8", got)
+	}
+}
+
+func TestRealIP_TrustedProxy_XRealIP(t *testing.T) {
+	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	h := make(http.Header)
+	h.Set("X-Real-IP", "5.6.7.8") // Set でカノニカルキーに変換される
+	r := &http.Request{
+		RemoteAddr: "10.0.0.1:80",
+		Header:     h,
+	}
+	if got := srv.realIP(r); got != "5.6.7.8" {
+		t.Errorf("realIP with trusted proxy X-Real-IP = %q, want 5.6.7.8", got)
+	}
+}
+
+func TestRealIP_UntrustedProxy_IgnoresHeader(t *testing.T) {
+	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	r := &http.Request{
+		RemoteAddr: "9.9.9.9:80", // NOT in trusted list
+		Header:     http.Header{"X-Forwarded-For": []string{"evil.attacker.com"}},
+	}
+	if got := srv.realIP(r); got != "9.9.9.9" {
+		t.Errorf("realIP with untrusted proxy = %q, want 9.9.9.9", got)
+	}
+}
+
+func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
+	srv := NewRelayServerWithProxies([]string{"127.0.0.1"})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	code, err := CreateSession(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// X-Forwarded-For で偽装した IP は別バケットとして扱われる
+	// (httptest のサーバーは 127.0.0.1 からのリクエストを受け取るので信頼プロキシとして動作する)
+	clientA := "1.1.1.1"
+	for i := 0; i < rateMaxJoin; i++ {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/session/ZZZZZZ", strings.NewReader("1.2.3.4:9999"))
+		req.Header.Set("X-Forwarded-For", clientA)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("rate limit triggered too early at request %d for clientA", i+1)
+		}
+	}
+
+	// clientA の 21 件目は 429
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/session/"+code, strings.NewReader("1.2.3.4:9999"))
+	req.Header.Set("X-Forwarded-For", clientA)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected 429 for clientA after limit, got %d", resp.StatusCode)
+	}
+
+	// clientB は別バケット — 制限されない
+	clientB := "2.2.2.2"
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/session/ZZZZZZ", strings.NewReader("1.2.3.4:9999"))
+	req.Header.Set("X-Forwarded-For", clientB)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		t.Errorf("clientB should not be rate-limited, got %d", resp.StatusCode)
+	}
+}
