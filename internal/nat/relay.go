@@ -227,7 +227,7 @@ func CreateSession(relayURL string) (string, error) {
 	}
 	defer resp.Body.Close()
 	var r map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&r); err != nil {
 		return "", fmt.Errorf("relay decode: %w", err)
 	}
 	code, ok := r["code"]
@@ -251,11 +251,11 @@ func Rendezvous(relayURL, code, myAddr string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return "", fmt.Errorf("relay: %s", strings.TrimSpace(string(b)))
 	}
 	var r map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&r); err != nil {
 		return "", fmt.Errorf("relay decode: %w", err)
 	}
 	peer, ok := r["peer"]

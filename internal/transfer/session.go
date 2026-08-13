@@ -22,24 +22,29 @@ var sessionIdentity noise.DHKey
 // sessionPeers は TOFU 検証ストア。nil の場合は TOFU を行わない。
 var sessionPeers *crypto.KnownPeers
 
-var initOnce sync.Once
+var (
+	initMu        sync.Mutex
+	sessionInited bool
+)
 
 // InitSession loads (or creates) the persistent identity and TOFU store from the
-// default config directory. Safe to call from multiple goroutines; executes only once.
-// Non-fatal: if initialization fails the session falls back to ephemeral keys.
+// default config directory. Safe to call from multiple goroutines.
+// Retries on failure — a temporary error does not permanently disable TOFU.
 func InitSession() error {
-	var initErr error
-	initOnce.Do(func() {
-		dir := crypto.IdentityDir()
-		key, err := crypto.LoadOrCreateIdentity(dir)
-		if err != nil {
-			initErr = err
-			return
-		}
-		sessionIdentity = key
-		sessionPeers = crypto.NewKnownPeers(dir)
-	})
-	return initErr
+	initMu.Lock()
+	defer initMu.Unlock()
+	if sessionInited {
+		return nil
+	}
+	dir := crypto.IdentityDir()
+	key, err := crypto.LoadOrCreateIdentity(dir)
+	if err != nil {
+		return err
+	}
+	sessionIdentity = key
+	sessionPeers = crypto.NewKnownPeers(dir)
+	sessionInited = true
+	return nil
 }
 
 // localKey は sessionIdentity が設定されていればそれを、なければ ephemeral 鍵を返す。
