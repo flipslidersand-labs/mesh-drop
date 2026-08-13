@@ -30,8 +30,9 @@ func NewKnownPeers(dir string) *KnownPeers {
 }
 
 // Verify checks whether pub is a trusted peer public key (TOFU).
-// On first encounter it prompts the user interactively (requires a TTY on stdin).
-// Returns nil if trusted, an error if rejected or the prompt cannot be shown.
+// On first encounter it prompts the user interactively via /dev/tty (not stdin),
+// so that pipe mode (where stdin carries data) does not conflict with the prompt.
+// Returns nil if trusted, an error if rejected or no TTY is available.
 // Storage uses FingerprintKey (full 64-char hex). Display uses FingerprintShort.
 func (kp *KnownPeers) Verify(pub []byte) error {
 	key := FingerprintKey(pub)
@@ -46,13 +47,20 @@ func (kp *KnownPeers) Verify(pub []byte) error {
 		return nil
 	}
 
-	// ロックを持たずに stdin を読む（デッドロック防止）
+	// /dev/tty を直接開いてプロンプトを表示・読み取る。
+	// stdin がパイプデータを運ぶ pipe モードでも競合しない。
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return fmt.Errorf("peer verification failed: no TTY available (use --allow-no-tofu to skip): %w", err)
+	}
+	defer tty.Close()
+
 	fmt.Fprintf(os.Stderr, "\nUnknown peer fingerprint: %s\n", FingerprintShort(pub))
 	fmt.Fprintf(os.Stderr, "Trust this peer? [y/N]: ")
 
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(tty)
 	if !scanner.Scan() {
-		return fmt.Errorf("peer verification failed: could not read answer (not a TTY?)")
+		return fmt.Errorf("peer verification failed: could not read answer")
 	}
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	if answer != "y" && answer != "yes" {
