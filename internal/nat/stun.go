@@ -45,8 +45,9 @@ func DiscoverWithConn(conn *net.UDPConn, stunServer string) (string, error) {
 		return "", fmt.Errorf("STUN write: %w", err)
 	}
 
+	const maxSTUNRetries = 10
 	buf := make([]byte, 1500)
-	for {
+	for i := 0; i < maxSTUNRetries; i++ {
 		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			return "", fmt.Errorf("STUN read: %w", err)
@@ -63,6 +64,7 @@ func DiscoverWithConn(conn *net.UDPConn, stunServer string) (string, error) {
 		}
 		return parseXorAddr(resp[20:])
 	}
+	return "", fmt.Errorf("STUN: no valid response after %d attempts", maxSTUNRetries)
 }
 
 // DiscoverExternalIP opens a temporary UDP socket, queries stunServer, and returns

@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 )
@@ -81,9 +82,10 @@ func (cp *checkpoint) doneIndices() []int {
 func (cp *checkpoint) markDone(idx int) error {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
-	if idx >= 0 && idx < len(cp.state.ChunksDone) {
-		cp.state.ChunksDone[idx] = true
+	if idx < 0 || idx >= len(cp.state.ChunksDone) {
+		return fmt.Errorf("markDone: index %d out of range [0, %d)", idx, len(cp.state.ChunksDone))
 	}
+	cp.state.ChunksDone[idx] = true
 	return cp.save()
 }
 

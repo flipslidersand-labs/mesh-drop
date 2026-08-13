@@ -212,7 +212,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
-func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte) error {
+func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte) (retErr error) {
 	if conn != nil {
 		defer conn.CloseWithError(0, "done")
 	}
@@ -229,6 +229,20 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 
 	// 出力ファイルを事前に確保
 	handles := make([]fileHandle, len(meta.Files))
+	closed := make([]bool, len(meta.Files))
+	defer func() {
+		if retErr != nil {
+			// エラー時：未クローズのファイルを close して削除
+			for i, h := range handles {
+				if !closed[i] && h.f != nil {
+					h.f.Close()
+				}
+				if h.path != "" {
+					os.Remove(h.path)
+				}
+			}
+		}
+	}()
 	for i, fm := range meta.Files {
 		outPath := filepath.Join(absBase, fm.Path)
 		absOut, err := filepath.Abs(outPath)
@@ -236,32 +250,19 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 			return fmt.Errorf("resolve path %s: %w", fm.Path, err)
 		}
 		if !strings.HasPrefix(absOut, absBase+string(os.PathSeparator)) {
-			for _, h := range handles[:i] {
-				h.f.Close()
-			}
 			return fmt.Errorf("path traversal detected: %s", fm.Path)
 		}
 		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
-			for _, h := range handles[:i] {
-				h.f.Close()
-			}
 			return err
 		}
 		f, err := os.Create(absOut)
 		if err != nil {
-			for _, h := range handles[:i] {
-				h.f.Close()
-			}
-			return err
-		}
-		if err := f.Truncate(fm.Size); err != nil {
-			f.Close()
-			for _, h := range handles[:i] {
-				h.f.Close()
-			}
 			return err
 		}
 		handles[i] = fileHandle{f: f, path: absOut}
+		if err := f.Truncate(fm.Size); err != nil {
+			return err
+		}
 	}
 
 	bar := progressbar.DefaultBytes(totalSize, "receiving")
@@ -280,6 +281,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 
 	for i := range handles {
 		handles[i].f.Close()
+		closed[i] = true
 	}
 
 	for e := range errCh {
@@ -332,6 +334,12 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	}
 	if cm.Offset < 0 || cm.Size < 0 {
 		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
+	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
+		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
+			return fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
+				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
+		}
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}

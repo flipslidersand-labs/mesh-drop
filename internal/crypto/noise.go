@@ -5,9 +5,17 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/flynn/noise"
 )
+
+var noiseReadPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
 
 const maxChunk = 65000 // Noise メッセージあたりの最大平文バイト数 (65535 - 16 AEAD tag の安全マージン)
 
@@ -54,14 +62,23 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	if _, err := io.ReadFull(s.rw, lb[:]); err != nil {
 		return 0, err
 	}
-	ct := make([]byte, binary.BigEndian.Uint16(lb[:]))
+	size := int(binary.BigEndian.Uint16(lb[:]))
+	bufPtr := noiseReadPool.Get().(*[]byte)
+	if size > len(*bufPtr) {
+		noiseReadPool.Put(bufPtr)
+		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*bufPtr))
+	}
+	ct := (*bufPtr)[:size]
 	if _, err := io.ReadFull(s.rw, ct); err != nil {
+		noiseReadPool.Put(bufPtr)
 		return 0, err
 	}
 	pt, err := s.dec.Decrypt(nil, nil, ct)
 	if err != nil {
+		noiseReadPool.Put(bufPtr)
 		return 0, fmt.Errorf("noise decrypt: %w", err)
 	}
+	noiseReadPool.Put(bufPtr)
 	n := copy(p, pt)
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)

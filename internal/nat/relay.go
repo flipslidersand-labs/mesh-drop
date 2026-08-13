@@ -75,12 +75,16 @@ func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
 // r.RemoteAddr が trustedProxies に含まれる場合に限り
 // X-Forwarded-For / X-Real-IP を採用し、それ以外は r.RemoteAddr を使う。
 // これにより信頼できないプロキシヘッダーによる IP スプーフィングを防ぐ。
+// trustedProxies マップへのアクセスはミューテックスで保護する。
 func (s *RelayServer) realIP(r *http.Request) string {
 	remote, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remote = r.RemoteAddr
 	}
-	if _, trusted := s.trustedProxies[remote]; !trusted {
+	s.mu.Lock()
+	_, trusted := s.trustedProxies[remote]
+	s.mu.Unlock()
+	if !trusted {
 		return remote
 	}
 	// X-Forwarded-For: client, proxy1, proxy2 — 最左のアドレスがクライアント
