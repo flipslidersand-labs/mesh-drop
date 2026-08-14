@@ -126,13 +126,24 @@ func (s *RelayServer) Handler() http.Handler {
 }
 
 // Start は addr でリレーサーバーを起動する (ブロッキング)。
+// certFile, keyFile が空でない場合は HTTPS で起動する。
 func (s *RelayServer) Start(addr string) error {
+	return s.StartTLS(addr, "", "")
+}
+
+// StartTLS は addr でリレーサーバーを起動する (ブロッキング)。
+// certFile, keyFile が指定されている場合は HTTPS で起動し、
+// 両方が空の場合は HTTP で起動する。
+func (s *RelayServer) StartTLS(addr, certFile, keyFile string) error {
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      s.Handler(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 60s
 		IdleTimeout:  60 * time.Second,
+	}
+	if certFile != "" && keyFile != "" {
+		return srv.ListenAndServeTLS(certFile, keyFile)
 	}
 	return srv.ListenAndServe()
 }
