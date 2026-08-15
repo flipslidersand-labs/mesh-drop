@@ -271,8 +271,10 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateSession は relayURL に新しいセッションを作成してペアリングコードを返す。
+// #151: Use an explicit HTTP client with a timeout instead of http.DefaultClient.
 func CreateSession(relayURL string) (string, error) {
-	resp, err := http.Post(relayURL+"/session", "text/plain", nil)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(relayURL+"/session", "text/plain", nil)
 	if err != nil {
 		return "", fmt.Errorf("relay create: %w", err)
 	}

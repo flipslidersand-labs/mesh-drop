@@ -252,10 +252,12 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if !strings.HasPrefix(absOut, absBase+string(os.PathSeparator)) {
 			return fmt.Errorf("path traversal detected: %s", fm.Path)
 		}
+		// #183: Use 0755 for directories and 0644 for files as default permissions.
 		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
 			return err
 		}
-		f, err := os.Create(absOut)
+		// #183: Create the file with 0644 permissions (safe default preserving umask intent).
+		f, err := os.OpenFile(absOut, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			return err
 		}
