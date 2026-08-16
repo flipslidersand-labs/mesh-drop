@@ -13,4 +13,4 @@ jobs:
     with:
       go-version: "1.25"
       runner: ubuntu-latest
-      coverage-threshold: 30   # 現状実測 32.8% に合わせた初期値。段階的に引き上げる
+      coverage-threshold: 30   # 現状実測 32.8%。段階的に引き上げる（目標 80%）
