@@ -91,6 +91,7 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 func (s *NoiseStream) Read(p []byte) (int, error) {
 	if len(s.rbuf) > 0 {
 		n := copy(p, s.rbuf)
+		clear(s.rbuf[:n]) // #211: 消費済み平文をゼロ化してメモリ残留を防ぐ
 		s.rbuf = s.rbuf[n:]
 		return n, nil
 	}
@@ -128,6 +129,7 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)
 	}
+	clear(pt) // #211: プール返却前に平文をゼロ化（オーバーフロー分は s.rbuf にコピー済み）
 	noisePlainPool.Put(ptBufPtr)
 	return n, nil
 }
