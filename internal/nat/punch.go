@@ -21,6 +21,12 @@ func HolePunch(ctx context.Context, conn *net.UDPConn, peerAddr *net.UDPAddr, co
 		default:
 		}
 		_, _ = conn.WriteToUDP([]byte{0x00}, peerAddr)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
 		timer.Reset(interval)
 		select {
 		case <-ctx.Done():

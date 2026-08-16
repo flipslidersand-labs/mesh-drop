@@ -61,7 +61,18 @@ func loadOrCreate(outPath string, meta Meta) *checkpoint {
 		return cp // 別の転送 → 新規
 	}
 
+	// #182: Reject state files where ChunksDone length doesn't match ChunksTotal.
+	if len(existing.ChunksDone) > existing.ChunksTotal {
+		return cp // 破損 → 新規
+	}
+
 	cp.state = existing
+	// Ensure ChunksDone slice is exactly ChunksTotal length (handles short slices from old state).
+	if len(cp.state.ChunksDone) < cp.state.ChunksTotal {
+		padded := make([]bool, cp.state.ChunksTotal)
+		copy(padded, cp.state.ChunksDone)
+		cp.state.ChunksDone = padded
+	}
 	return cp
 }
 

@@ -19,6 +19,11 @@ var noiseReadPool = sync.Pool{
 
 const maxChunk = 65000 // Noise メッセージあたりの最大平文バイト数 (65535 - 16 AEAD tag の安全マージン)
 
+// maxHandshakeMsgLen is the maximum size allowed for a single Noise handshake message.
+// Noise_XX messages are small (ephemeral key + static key + tag overhead), well under 1 KiB.
+// #171: Reject oversized handshake frames before allocating memory.
+const maxHandshakeMsgLen = uint16(4096)
+
 // NoiseStream は io.ReadWriter を Noise トランスポート暗号化でラップする。
 type NoiseStream struct {
 	rw   io.ReadWriter
@@ -163,12 +168,18 @@ func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStr
 		return cs0, cs1, nil
 	}
 
+	// #171: recv validates the length-prefixed handshake frame before allocating.
 	recv := func() (*noise.CipherState, *noise.CipherState, error) {
 		var lb [2]byte
 		if _, err := io.ReadFull(rw, lb[:]); err != nil {
 			return nil, nil, err
 		}
-		msg := make([]byte, binary.BigEndian.Uint16(lb[:]))
+		msgLen := binary.BigEndian.Uint16(lb[:])
+		// #171: Reject oversized handshake messages to prevent memory exhaustion.
+		if msgLen > maxHandshakeMsgLen {
+			return nil, nil, fmt.Errorf("noise handshake: message length %d exceeds maximum %d", msgLen, maxHandshakeMsgLen)
+		}
+		msg := make([]byte, msgLen)
 		if _, err := io.ReadFull(rw, msg); err != nil {
 			return nil, nil, err
 		}

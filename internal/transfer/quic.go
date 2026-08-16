@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
@@ -23,13 +24,22 @@ import (
 // Meta.IsPipe=true   → doReceivePipeConn へ dispatch
 // それ以外           → doReceiveFileResume（resume 対応シングルファイル）
 
+// quicConfig returns a *quic.Config with idle timeout and keep-alive set.
+// #179: Prevent connections from hanging indefinitely by enforcing idle timeout.
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIdleTimeout:  120 * time.Second,
+		KeepAlivePeriod: 30 * time.Second,
+	}
+}
+
 // Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
 func Listen(ctx context.Context, addr string) error {
 	tlsConf, err := serverTLS()
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	ln, err := quic.ListenAddr(addr, tlsConf, nil)
+	ln, err := quic.ListenAddr(addr, tlsConf, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
@@ -42,7 +52,7 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	ln, err := quic.Listen(udpConn, tlsConf, nil)
+	ln, err := quic.Listen(udpConn, tlsConf, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
@@ -51,7 +61,7 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 func Send(ctx context.Context, addr, filePath string, nChunks int) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
+	conn, err := quic.DialAddr(ctx, addr, clientTLS(), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -60,7 +70,7 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
@@ -126,7 +136,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 		return Meta{}, nil, nil, err
 	}
 
-	if !meta.IsPipe && meta.Chunks < 1 {
+	if !meta.IsPipe && !meta.IsBatch && meta.Chunks < 0 {
 		return Meta{}, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
@@ -172,19 +182,35 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		return fmt.Errorf("hash: %w", err)
 	}
 
+	// #169: For zero-byte files use Chunks=0; the receiver completes immediately.
+	chunks := nChunks
+	if info.Size() == 0 {
+		chunks = 0
+	}
+
 	meta := Meta{
 		Name:   filepath.Base(filePath),
 		Size:   info.Size(),
 		Hash:   hash,
-		Chunks: nChunks,
+		Chunks: chunks,
 	}
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
+	// #169: Nothing to transfer for zero-byte files.
+	if chunks == 0 {
+		fmt.Printf("✓ Sent: %s (0 bytes, 0 chunks)\n", filePath)
+		return nil
+	}
+
 	skipSet := make(map[int]bool, len(rs.ChunksDone))
 	for _, idx := range rs.ChunksDone {
+		// #168: Validate chunk index before using it.
+		if idx < 0 || idx >= chunks {
+			continue
+		}
 		skipSet[idx] = true
 	}
 	if len(skipSet) > 0 {
@@ -285,7 +311,7 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) error {
 	defer conn.CloseWithError(0, "done")
 
-	if meta.Chunks < 1 {
+	if meta.Chunks < 0 {
 		return fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
@@ -296,6 +322,10 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 
 	skipSet := make(map[int]bool)
 	for _, idx := range cp.doneIndices() {
+		// #168/#181: Validate index before using it.
+		if idx < 0 || idx >= meta.Chunks {
+			continue
+		}
 		skipSet[idx] = true
 	}
 
@@ -321,6 +351,28 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			f.Close()
 			return err
 		}
+	}
+
+	// #169: Zero-byte file — nothing to receive, just verify hash and finish.
+	if meta.Chunks == 0 {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			f.Close()
+			return err
+		}
+		got, err := hashReader(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if meta.Hash != "" && got != meta.Hash {
+			_ = os.Remove(outPath)
+			cp.finish()
+			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+		}
+		cp.finish()
+		fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
+		fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
+		return nil
 	}
 
 	bar := progressbar.DefaultBytes(meta.Size, "receiving")
