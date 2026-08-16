@@ -22,6 +22,7 @@ type RelayServer struct {
 	ipRate         map[string]*ipBucket // handleJoin の IP ベースレート制限
 	ipCreateRate   map[string]*ipBucket // handleCreate の IP ベースレート制限 (#164)
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
+	trustedCIDRs   []*net.IPNet         // #214: 起動時に一度 parse した CIDR リスト
 	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
 }
 
@@ -74,11 +75,19 @@ func NewRelayServer() *RelayServer {
 // X-Forwarded-For / X-Real-IP をクライアント IP として採用する。
 // #162: CIDR 表記をサポートする。
 func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
+	// #214: CIDR を起動時に一度だけ parse してリクエストごとのアロケーションを排除する。
+	var cidrs []*net.IPNet
+	for _, entry := range trustedProxies {
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			cidrs = append(cidrs, network)
+		}
+	}
 	s := &RelayServer{
 		sessions:       make(map[string]*rdv),
 		ipRate:         make(map[string]*ipBucket),
 		ipCreateRate:   make(map[string]*ipBucket),
 		trustedProxies: trustedProxies,
+		trustedCIDRs:   cidrs,
 		stopEvict:      make(chan struct{}),
 	}
 	// #176/#180: 定期的に期限切れレートバケットを退避してマップ肥大化を防ぐ。
@@ -126,20 +135,20 @@ func (s *RelayServer) Stop() {
 
 // isTrustedProxy は ip が trustedProxies リストに含まれるか（完全一致または CIDR）を返す。
 // #162: CIDR 表記のサポートを追加。
-// trustedProxies はイミュータブルなのでミューテックスなしで安全に参照できる。
+// #214: CIDR は起動時に parse 済みの trustedCIDRs を使いリクエストごとのアロケーションを排除。
+// trustedProxies / trustedCIDRs はイミュータブルなのでミューテックスなしで安全に参照できる。
 func (s *RelayServer) isTrustedProxy(ip string) bool {
-	parsed := net.ParseIP(ip)
 	for _, entry := range s.trustedProxies {
-		// まず完全一致を試みる
 		if entry == ip {
 			return true
 		}
-		// CIDR 表記として解釈を試みる
-		_, network, err := net.ParseCIDR(entry)
-		if err != nil {
-			continue
-		}
-		if parsed != nil && network.Contains(parsed) {
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, network := range s.trustedCIDRs {
+		if network.Contains(parsed) {
 			return true
 		}
 	}
