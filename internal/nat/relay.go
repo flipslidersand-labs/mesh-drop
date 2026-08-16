@@ -35,7 +35,7 @@ type ipBucket struct {
 const maxSessions = 10_000
 
 // sessionTTL は handleJoin が一度も呼ばれなかったセッションの有効期限。
-// handleJoin 内の long-poll タイムアウト (60s) より余裕を持たせる。
+// handleJoin 内の long-poll タイムアウト (30s) より余裕を持たせる。
 const sessionTTL = 70 * time.Second
 
 // rateWindow / rateMaxJoin はコード総当たり攻撃を緩和するレート制限定数。
@@ -229,7 +229,7 @@ func (s *RelayServer) StartTLS(addr, certFile, keyFile string) error {
 		Addr:         addr,
 		Handler:      s.Handler(),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 60s
+		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 30s、余裕を持たせて 70s
 		IdleTimeout:  60 * time.Second,
 	}
 	if certFile != "" && keyFile != "" {
