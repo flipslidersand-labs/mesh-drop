@@ -2,12 +2,14 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
 
 	"github.com/flynn/noise"
+	"golang.org/x/crypto/hkdf"
 )
 
 // noiseReadPool pools ciphertext read buffers (max Noise frame = 65535 bytes).
@@ -41,6 +43,9 @@ const maxChunk = 65000 // Noise メッセージあたりの最大平文バイト
 // Noise_XX messages are small (ephemeral key + static key + tag overhead), well under 1 KiB.
 // #171: Reject oversized handshake frames before allocating memory.
 const maxHandshakeMsgLen = uint16(4096)
+
+// derivedKeyLen is the length in bytes of a key derived for a chunk stream.
+const derivedKeyLen = 32
 
 // NoiseStream は io.ReadWriter を Noise トランスポート暗号化でラップする。
 type NoiseStream struct {
@@ -120,6 +125,8 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	noiseReadPool.Put(ctBufPtr)
 
 	if err != nil {
+		// #166: zero before pool return even on error path.
+		zeroBytes(*ptBufPtr)
 		noisePlainPool.Put(ptBufPtr)
 		return 0, fmt.Errorf("noise decrypt: %w", err)
 	}
@@ -128,8 +135,20 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)
 	}
+
+	// #166: zero the decrypted plaintext region before returning to the pool.
+	// sync.Pool buffers are shared across goroutines; residual plaintext must not
+	// leak to the next caller that obtains this buffer slot.
+	zeroBytes((*ptBufPtr)[:len(pt)])
 	noisePlainPool.Put(ptBufPtr)
 	return n, nil
+}
+
+// zeroBytes overwrites b with zeros to erase sensitive data.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // GenerateKeypair は新しい X25519 鍵ペアを生成する。
@@ -148,15 +167,51 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 	})
 }
 
+// DeriveChunkStreamKey derives a 32-byte symmetric key for a numbered chunk stream
+// from the control stream's established send/receive keys and a stream-specific label.
+//
+// #148: chunk streams must NOT perform a full Noise_XX handshake. Instead the
+// control stream's session material is used as the IKM for HKDF-SHA256 so that
+// every chunk stream is cryptographically bound to the authenticated control session.
+//
+// label format: "chunk-stream-<N>" (caller supplies the N).
+// ikm: concatenation of the control stream's enc key || dec key (each 32 bytes).
+func DeriveChunkStreamKey(encKey, decKey []byte, label string) ([]byte, error) {
+	if len(encKey) == 0 || len(decKey) == 0 {
+		return nil, fmt.Errorf("DeriveChunkStreamKey: enc/dec keys must not be empty")
+	}
+	ikm := make([]byte, len(encKey)+len(decKey))
+	copy(ikm, encKey)
+	copy(ikm[len(encKey):], decKey)
+
+	info := []byte(label)
+	r := hkdf.New(sha256.New, ikm, nil, info)
+
+	out := make([]byte, derivedKeyLen)
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, fmt.Errorf("DeriveChunkStreamKey: HKDF expansion failed: %w", err)
+	}
+
+	// Zero the IKM copy now that HKDF has consumed it.
+	zeroBytes(ikm)
+	return out, nil
+}
+
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: This function is intended for the *control stream only*.
+// Chunk streams must NOT call this; derive per-stream keys with DeriveChunkStreamKey
+// from the control stream's session keys instead.
+// TODO(#148): enforce at the type level — a ChunkStream constructor should accept
+// a derived key and refuse a HandshakeState.
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeInitiatorFull(rw, key)
 	return ns, err
 }
 
 // HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: control stream only — see HandshakeInitiator for the chunk-stream policy.
 func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeResponderFull(rw, key)
 	return ns, err

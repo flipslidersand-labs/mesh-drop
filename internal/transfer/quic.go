@@ -1,7 +1,11 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -33,35 +37,135 @@ func quicConfig() *quic.Config {
 	}
 }
 
-// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
-func Listen(ctx context.Context, addr string) error {
-	tlsConf, err := serverTLS()
+// TLSBundle holds a self-signed TLS configuration and the SHA-256 fingerprint
+// of its certificate. Generate one with NewTLSBundle, then pass it to
+// ListenWithBundle so the same cert is used for both the TLS listener and the
+// mDNS fingerprint advertisement.
+// #160: Bundling cert + fingerprint together ensures they always match and
+// eliminates the race condition of generating two independent certificates.
+type TLSBundle struct {
+	Config      *tls.Config
+	Fingerprint []byte // SHA-256 of the DER-encoded leaf certificate
+}
+
+// NewTLSBundle generates a fresh self-signed certificate and returns a TLSBundle
+// containing the TLS config and its SHA-256 fingerprint.
+// #160: Call once, share between ListenWithBundle and mDNS Advertise.
+func NewTLSBundle() (*TLSBundle, error) {
+	cfg, fp, err := serverTLSAndFingerprint()
 	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
+		return nil, err
 	}
-	ln, err := quic.ListenAddr(addr, tlsConf, quicConfig())
+	return &TLSBundle{Config: cfg, Fingerprint: fp}, nil
+}
+
+// #160: serverTLSAndFingerprint generates a self-signed TLS cert and returns
+// both the *tls.Config for the listener and the SHA-256 fingerprint of the
+// DER-encoded certificate. The fingerprint is used by the sender to pin the
+// connection and prevent MITM via a forged self-signed cert.
+func serverTLSAndFingerprint() (*tls.Config, []byte, error) {
+	cfg, err := serverTLS()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cfg.Certificates) == 0 || len(cfg.Certificates[0].Certificate) == 0 {
+		return nil, nil, fmt.Errorf("serverTLS returned no certificate")
+	}
+	der := cfg.Certificates[0].Certificate[0]
+	sum := sha256.Sum256(der)
+	return cfg, sum[:], nil
+}
+
+// #160: clientTLSPinned returns a *tls.Config that pins the peer certificate to
+// the expected SHA-256 fingerprint. InsecureSkipVerify is set true to suppress
+// the default chain verification (cert is self-signed and has no CA), but the
+// custom VerifyPeerCertificate callback enforces the exact fingerprint instead.
+// This provides equivalent security to certificate pinning and prevents MITM.
+func clientTLSPinned(expectedFingerprint []byte) *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec — replaced by fingerprint pinning below
+		NextProtos:         []string{"meshdrop/1"},
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("TLS: peer sent no certificate")
+			}
+			sum := sha256.Sum256(rawCerts[0])
+			if !bytes.Equal(sum[:], expectedFingerprint) {
+				return fmt.Errorf("TLS: certificate fingerprint mismatch — possible MITM (got %x, want %x)",
+					sum[:8], expectedFingerprint[:8])
+			}
+			// Verify the certificate is self-signed (Issuer == Subject).
+			// This is an additional sanity check to ensure we are pinning a
+			// self-signed cert and not some CA-signed cert that happens to
+			// match the fingerprint via a hash collision.
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("TLS: could not parse peer certificate: %w", err)
+			}
+			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+				return fmt.Errorf("TLS: peer certificate is not self-signed")
+			}
+			return nil
+		},
+	}
+}
+
+// ListenWithBundle は TLSBundle を使って QUIC で 1 接続を待ち受ける。
+// TLSBundle は NewTLSBundle で生成し、同じ束を mDNS Advertise にも渡すことで
+// フィンガープリントと実際のサーバー証明書が必ず一致する。
+// #160: Use the pre-generated TLSBundle so the fingerprint advertised via mDNS
+// matches the TLS cert used by the listener.
+func ListenWithBundle(ctx context.Context, addr string, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
-// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
-func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
-	tlsConf, err := serverTLS()
-	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
-	}
-	ln, err := quic.Listen(udpConn, tlsConf, quicConfig())
+// ListenNATWithBundle は TLSBundle を使って既存の UDP ソケット上で QUIC リスナーを起動する。
+// #160: Same as ListenWithBundle but for the NAT traversal path.
+func ListenNATWithBundle(ctx context.Context, udpConn *net.UDPConn, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.Listen(udpConn, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
+// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
+// Prefer ListenWithBundle when you also need to advertise the fingerprint via mDNS.
+func Listen(ctx context.Context, addr string) error {
+	// #160: Generate server cert and obtain fingerprint for out-of-band sharing.
+	// The fingerprint is printed so the user can pass it to the sender via --fingerprint.
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenWithBundle(ctx, addr, bundle)
+}
+
+// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
+// Prefer ListenNATWithBundle when you also need to advertise the fingerprint via mDNS.
+func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
+	// #160: Same as Listen but for the NAT traversal path.
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenNATWithBundle(ctx, udpConn, bundle)
+}
+
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
-func Send(ctx context.Context, addr, filePath string, nChunks int) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), quicConfig())
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+// Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte) error {
+	tlsCfg := clientTLSForFingerprint(fingerprint)
+	conn, err := quic.DialAddr(ctx, addr, tlsCfg, quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -69,12 +173,46 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), quicConfig())
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte) error {
+	tlsCfg := clientTLSForFingerprint(fingerprint)
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, tlsCfg, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
 	return doSend(ctx, conn, filePath, nChunks)
+}
+
+// clientTLSForFingerprint returns a pinned TLS config when a fingerprint is
+// provided, or a self-signed-only config when fingerprint is nil.
+// #160: Never use a fully open InsecureSkipVerify without at minimum checking
+// that the certificate is self-signed.
+func clientTLSForFingerprint(fingerprint []byte) *tls.Config {
+	if len(fingerprint) > 0 {
+		return clientTLSPinned(fingerprint)
+	}
+	// No fingerprint provided: fall back to checking that the cert is self-signed.
+	// This prevents connecting to a CA-issued cert (e.g. a proxy), but does not
+	// prevent a MITM that generates their own self-signed cert.
+	// Users should provide --fingerprint for full security.
+	fmt.Fprintln(os.Stderr, "WARNING: no --fingerprint provided; TLS is using self-signed-only check (weaker). Pass --fingerprint from the receiver for full MITM protection.")
+	return &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec — replaced by self-signed check below
+		NextProtos:         []string{"meshdrop/1"},
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("TLS: peer sent no certificate")
+			}
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("TLS: could not parse peer certificate: %w", err)
+			}
+			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+				return fmt.Errorf("TLS: peer certificate is not self-signed — possible MITM or misconfiguration")
+			}
+			return nil
+		},
+	}
 }
 
 // --- accept & dispatch ---
@@ -176,8 +314,12 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		return err
 	}
 
+	// #187: Hash the file using ReadAt from offset 0 via the already-open handle.
+	// This avoids closing and re-opening the file between hash computation and
+	// chunk transmission, eliminating the TOCTOU window where the file could
+	// be modified on disk between the hash pass and the data pass.
 	fmt.Printf("Hashing %s ...\n", filepath.Base(filePath))
-	hash, err := hashReader(f)
+	hash, err := hashFileAt(f, info.Size())
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
 	}

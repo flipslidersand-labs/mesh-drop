@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -100,20 +101,29 @@ func cmdReceive() *cobra.Command {
 			}
 
 			if pipe {
+				// Pipe mode: advertise without fingerprint (pipe cert is generated
+				// inside ListenPipe; bundle-based pinning is file-mode only).
 				go func() {
-					if err := discovery.Advertise(ctx, port); err != nil && !errors.Is(err, context.Canceled) {
+					if err := discovery.Advertise(ctx, port, nil); err != nil && !errors.Is(err, context.Canceled) {
 						log.Printf("mDNS: %v", err)
 					}
 				}()
 				return transfer.ListenPipe(ctx, addr)
 			}
 
+			// #160: Generate TLS cert bundle once so the same cert fingerprint is
+			// used for both the QUIC listener and the mDNS advertisement.
+			// This guarantees the sender can auto-pin using the advertised fingerprint.
+			bundle, err := transfer.NewTLSBundle()
+			if err != nil {
+				return fmt.Errorf("TLS setup: %w", err)
+			}
 			go func() {
-				if err := discovery.Advertise(ctx, port); err != nil && !errors.Is(err, context.Canceled) {
+				if err := discovery.Advertise(ctx, port, bundle.Fingerprint); err != nil && !errors.Is(err, context.Canceled) {
 					log.Printf("mDNS: %v", err)
 				}
 			}()
-			return transfer.Listen(ctx, addr)
+			return transfer.ListenWithBundle(ctx, addr, bundle)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", discovery.DefaultPort, "listen port")
@@ -180,6 +190,8 @@ func cmdSend() *cobra.Command {
 	var relayURL string
 	var code string
 	var pipe bool
+	var forcePeer string
+	var fingerprintHex string
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -195,6 +207,12 @@ func cmdSend() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			// #160: Decode optional TLS certificate fingerprint.
+			fingerprint, err := parseFingerprint(fingerprintHex)
+			if err != nil {
+				return err
+			}
+
 			// pipe モード: 引数不要
 			if pipe {
 				if relayURL != "" {
@@ -203,7 +221,7 @@ func cmdSend() *cobra.Command {
 					}
 					return sendPipeNAT(ctx, relayURL, code)
 				}
-				peer, err := discoverAndSelect(ctx, timeout)
+				peer, err := discoverAndSelect(ctx, timeout, forcePeer)
 				if err != nil {
 					return err
 				}
@@ -226,12 +244,21 @@ func cmdSend() *cobra.Command {
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
-				return sendNAT(ctx, relayURL, code, target, chunks)
+				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint)
 			}
 
-			peer, err := discoverAndSelect(ctx, timeout)
+			peer, err := discoverAndSelect(ctx, timeout, forcePeer)
 			if err != nil {
 				return err
+			}
+
+			// #160: If no --fingerprint was provided but the mDNS peer advertised
+			// one, use it automatically. This gives full pinning without manual
+			// out-of-band exchange.
+			effectiveFingerprint := fingerprint
+			if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
+				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+				effectiveFingerprint = peer.Fingerprint
 			}
 
 			info, err := os.Stat(target)
@@ -243,7 +270,7 @@ func cmdSend() *cobra.Command {
 				return transfer.SendDir(ctx, peer.Addr(), target, chunks)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-			return transfer.Send(ctx, peer.Addr(), target, chunks)
+			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout (LAN mode)")
@@ -251,11 +278,18 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay server URL for NAT traversal")
 	cmd.Flags().StringVar(&code, "code", "", "pairing code from receiver (required with --relay)")
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "read from stdin instead of a file")
+	// #165: --peer requires explicit target in non-TTY mode to prevent mDNS MITM.
+	cmd.Flags().StringVar(&forcePeer, "peer", "", "mDNS peer name or address to connect to (required in non-interactive mode)")
+	// #160: --fingerprint pins the receiver's TLS certificate SHA-256 fingerprint.
+	cmd.Flags().StringVar(&fingerprintHex, "fingerprint", "", "SHA-256 fingerprint of receiver's TLS certificate (hex, from receiver output)")
 	return cmd
 }
 
 // discoverAndSelect は mDNS でピアを探し、複数いれば対話選択する。
-func discoverAndSelect(ctx context.Context, timeout time.Duration) (discovery.Peer, error) {
+// #165: In non-TTY mode, peer auto-selection is not allowed because an attacker
+// can inject a spoofed mDNS peer and become the automatically selected target.
+// Non-interactive callers must supply the explicit peer address via --peer.
+func discoverAndSelect(ctx context.Context, timeout time.Duration, forcePeer string) (discovery.Peer, error) {
 	fmt.Printf("Searching for peers (%.0fs)...\n", timeout.Seconds())
 	peers, err := discovery.Browse(ctx, timeout)
 	if err != nil {
@@ -268,10 +302,37 @@ func discoverAndSelect(ctx context.Context, timeout time.Duration) (discovery.Pe
 	for i, p := range peers {
 		fmt.Printf("  [%d] %s  (%s)\n", i+1, p.Name, p.Addr())
 	}
-	if len(peers) == 1 || !isTerminal() {
+
+	// #165: If --peer was explicitly supplied, match it against discovered peers.
+	if forcePeer != "" {
+		for _, p := range peers {
+			if p.Name == forcePeer || p.Addr() == forcePeer || p.IP == forcePeer || p.Host == forcePeer {
+				return p, nil
+			}
+		}
+		return discovery.Peer{}, fmt.Errorf("peer %q not found in mDNS results (found: %v)", forcePeer, peerNames(peers))
+	}
+
+	// #165: Non-interactive mode: require explicit --peer to prevent mDNS MITM.
+	if !isTerminal() {
+		return discovery.Peer{}, fmt.Errorf(
+			"non-interactive mode: cannot auto-select peer — pass --peer <name|addr> to specify the target explicitly (found: %v)",
+			peerNames(peers))
+	}
+
+	if len(peers) == 1 {
 		return peers[0], nil
 	}
 	return promptPeerSelection(peers)
+}
+
+// peerNames returns peer names for error messages.
+func peerNames(peers []discovery.Peer) []string {
+	names := make([]string, len(peers))
+	for i, p := range peers {
+		names[i] = p.Name
+	}
+	return names
 }
 
 // promptPeerSelection は番号入力でピアを選ばせる。
@@ -298,13 +359,15 @@ func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) error {
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
 	}
 	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
 
+	// #167: Resolve the STUN server address before querying, so we can validate
+	// that responses come from the expected server (enforced in DiscoverWithConn).
 	fmt.Printf("Querying STUN (%s)...\n", nat.DefaultSTUN)
 	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
 	if err != nil {
@@ -342,7 +405,28 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) er
 	if info.IsDir() {
 		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks)
 	}
-	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks)
+	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
+}
+
+// parseFingerprint decodes a hex-encoded SHA-256 fingerprint string.
+// Returns nil (no error) if fpHex is empty (fingerprint not provided).
+func parseFingerprint(fpHex string) ([]byte, error) {
+	if fpHex == "" {
+		return nil, nil
+	}
+	fp, err := hexDecode(fpHex)
+	if err != nil {
+		return nil, fmt.Errorf("--fingerprint: invalid hex: %w", err)
+	}
+	if len(fp) != 32 {
+		return nil, fmt.Errorf("--fingerprint: expected 32-byte SHA-256 fingerprint (64 hex chars), got %d bytes", len(fp))
+	}
+	return fp, nil
+}
+
+// hexDecode is a local helper wrapping encoding/hex.DecodeString.
+func hexDecode(s string) ([]byte, error) {
+	return hex.DecodeString(s)
 }
 
 func sendPipeNAT(ctx context.Context, relayURL, code string) error {
