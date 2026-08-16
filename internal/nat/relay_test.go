@@ -1,6 +1,7 @@
 package nat
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +18,8 @@ func TestRelayRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(code) != 6 {
-		t.Fatalf("expected 6-char code, got %q", code)
+	if len(code) != 12 {
+		t.Fatalf("expected 12-char code, got %q", code)
 	}
 
 	const receiverAddr = "1.2.3.4:44444"
@@ -101,14 +102,14 @@ func TestRelaySessionCleanupOnTimeout(t *testing.T) {
 	defer ts.Close()
 
 	// handleCreate を直接呼び、TTL ゴルーチンが短時間で走ることを確認できないため、
-	// maxSessions 制限のテストで代替する
+	// maxSessions 制限のテストで代替する。セッションマップを直接埋めて
+	// per-IP 作成レート制限を回避する。
+	srv.mu.Lock()
 	for i := 0; i < maxSessions; i++ {
-		resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
+		key := fmt.Sprintf("FILL%08d", i)
+		srv.sessions[key] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	}
+	srv.mu.Unlock()
 	// maxSessions 到達 → 次の POST は 503
 	resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
 	if err != nil {
