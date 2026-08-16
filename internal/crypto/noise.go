@@ -63,9 +63,12 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 			chunk = p[:maxChunk]
 		}
 
+		// #149: get a pooled write buffer large enough for prefix + ciphertext.
+		// Layout: [2-byte length][ciphertext (plaintext + 16-byte AEAD tag)]
 		frameBufPtr := noiseWritePool.Get().(*[]byte)
 		frameBuf := *frameBufPtr
 
+		// Encrypt into frameBuf[2:] so we can prepend the length in-place.
 		ct, err := s.enc.Encrypt(frameBuf[2:2], nil, chunk)
 		if err != nil {
 			noiseWritePool.Put(frameBufPtr)
@@ -73,8 +76,10 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 		}
 
 		ctLen := len(ct)
+		// Write length prefix directly into the first two bytes of frameBuf.
 		binary.BigEndian.PutUint16(frameBuf[:2], uint16(ctLen))
 
+		// #173: single Write call for length prefix + ciphertext together.
 		frame := frameBuf[:2+ctLen]
 		_, werr := s.rw.Write(frame)
 		noiseWritePool.Put(frameBufPtr)
@@ -100,6 +105,7 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	}
 	size := int(binary.BigEndian.Uint16(lb[:]))
 
+	// Get pooled ciphertext buffer.
 	ctBufPtr := noiseReadPool.Get().(*[]byte)
 	if size > len(*ctBufPtr) {
 		noiseReadPool.Put(ctBufPtr)
@@ -111,9 +117,11 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
+	// #172: get a pooled plaintext buffer and pass it as dst to Decrypt.
 	ptBufPtr := noisePlainPool.Get().(*[]byte)
 	pt, err := s.dec.Decrypt((*ptBufPtr)[:0], nil, ct)
 
+	// Ciphertext buffer no longer needed after Decrypt.
 	noiseReadPool.Put(ctBufPtr)
 
 	if err != nil {

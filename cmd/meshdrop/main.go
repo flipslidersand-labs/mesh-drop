@@ -489,20 +489,27 @@ func cmdInfo() *cobra.Command {
 func cmdRelay() *cobra.Command {
 	var addr string
 	var trustedProxies []string
+	var certFile, keyFile string
 	cmd := &cobra.Command{
 		Use:   "relay",
 		Short: "Run a signaling relay server for NAT traversal",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(trustedProxies) > 0 {
-				fmt.Printf("Relay server on %s (trusted proxies: %s)\n", addr, strings.Join(trustedProxies, ", "))
-			} else {
-				fmt.Printf("Relay server on %s\n", addr)
+			proto := "HTTP"
+			if certFile != "" && keyFile != "" {
+				proto = "HTTPS"
 			}
-			return nat.NewRelayServerWithProxies(trustedProxies).Start(addr)
+			if len(trustedProxies) > 0 {
+				fmt.Printf("Relay server on %s (protocol: %s, trusted proxies: %s)\n", addr, proto, strings.Join(trustedProxies, ", "))
+			} else {
+				fmt.Printf("Relay server on %s (protocol: %s)\n", addr, proto)
+			}
+			return nat.NewRelayServerWithProxies(trustedProxies).StartTLS(addr, certFile, keyFile)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address")
 	cmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxy", nil,
 		"IP addresses of trusted reverse proxies (enables X-Forwarded-For / X-Real-IP support)")
+	cmd.Flags().StringVar(&certFile, "cert", "", "path to TLS certificate file (enables HTTPS)")
+	cmd.Flags().StringVar(&keyFile, "key", "", "path to TLS private key file (enables HTTPS)")
 	return cmd
 }
