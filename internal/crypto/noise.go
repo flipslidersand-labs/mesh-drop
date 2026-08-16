@@ -2,14 +2,17 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
 
 	"github.com/flynn/noise"
+	"golang.org/x/crypto/hkdf"
 )
 
+// noiseReadPool pools ciphertext read buffers (max Noise frame = 65535 bytes).
 var noiseReadPool = sync.Pool{
 	New: func() interface{} {
 		b := make([]byte, 65535)
@@ -17,7 +20,32 @@ var noiseReadPool = sync.Pool{
 	},
 }
 
+// noisePlainPool pools plaintext buffers reused after Decrypt (#172).
+var noisePlainPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
+
+// noiseWritePool pools outbound frame buffers: 2-byte length prefix + payload (#149, #173).
+// Size: 2 (len prefix) + maxChunk + 16 (AEAD tag) = 65018 bytes worst case.
+var noiseWritePool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 2+maxChunk+16)
+		return &b
+	},
+}
+
 const maxChunk = 65000 // Noise メッセージあたりの最大平文バイト数 (65535 - 16 AEAD tag の安全マージン)
+
+// maxHandshakeMsgLen is the maximum size allowed for a single Noise handshake message.
+// Noise_XX messages are small (ephemeral key + static key + tag overhead), well under 1 KiB.
+// #171: Reject oversized handshake frames before allocating memory.
+const maxHandshakeMsgLen = uint16(4096)
+
+// derivedKeyLen is the length in bytes of a key derived for a chunk stream.
+const derivedKeyLen = 32
 
 // NoiseStream は io.ReadWriter を Noise トランスポート暗号化でラップする。
 type NoiseStream struct {
@@ -34,18 +62,26 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 		if len(chunk) > maxChunk {
 			chunk = p[:maxChunk]
 		}
-		ct, err := s.enc.Encrypt(nil, nil, chunk)
+
+		frameBufPtr := noiseWritePool.Get().(*[]byte)
+		frameBuf := *frameBufPtr
+
+		ct, err := s.enc.Encrypt(frameBuf[2:2], nil, chunk)
 		if err != nil {
+			noiseWritePool.Put(frameBufPtr)
 			return written, err
 		}
-		var lb [2]byte
-		binary.BigEndian.PutUint16(lb[:], uint16(len(ct)))
-		if _, err := s.rw.Write(lb[:]); err != nil {
-			return written, err
+
+		ctLen := len(ct)
+		binary.BigEndian.PutUint16(frameBuf[:2], uint16(ctLen))
+
+		frame := frameBuf[:2+ctLen]
+		_, werr := s.rw.Write(frame)
+		noiseWritePool.Put(frameBufPtr)
+		if werr != nil {
+			return written, werr
 		}
-		if _, err := s.rw.Write(ct); err != nil {
-			return written, err
-		}
+
 		written += len(chunk)
 		p = p[len(chunk):]
 	}
@@ -63,27 +99,48 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	size := int(binary.BigEndian.Uint16(lb[:]))
-	bufPtr := noiseReadPool.Get().(*[]byte)
-	if size > len(*bufPtr) {
-		noiseReadPool.Put(bufPtr)
-		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*bufPtr))
+
+	ctBufPtr := noiseReadPool.Get().(*[]byte)
+	if size > len(*ctBufPtr) {
+		noiseReadPool.Put(ctBufPtr)
+		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*ctBufPtr))
 	}
-	ct := (*bufPtr)[:size]
+	ct := (*ctBufPtr)[:size]
 	if _, err := io.ReadFull(s.rw, ct); err != nil {
-		noiseReadPool.Put(bufPtr)
+		noiseReadPool.Put(ctBufPtr)
 		return 0, err
 	}
-	pt, err := s.dec.Decrypt(nil, nil, ct)
+
+	ptBufPtr := noisePlainPool.Get().(*[]byte)
+	pt, err := s.dec.Decrypt((*ptBufPtr)[:0], nil, ct)
+
+	noiseReadPool.Put(ctBufPtr)
+
 	if err != nil {
-		noiseReadPool.Put(bufPtr)
+		// #166: zero before pool return even on error path.
+		zeroBytes(*ptBufPtr)
+		noisePlainPool.Put(ptBufPtr)
 		return 0, fmt.Errorf("noise decrypt: %w", err)
 	}
-	noiseReadPool.Put(bufPtr)
+
 	n := copy(p, pt)
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)
 	}
+
+	// #166: zero the decrypted plaintext region before returning to the pool.
+	// sync.Pool buffers are shared across goroutines; residual plaintext must not
+	// leak to the next caller that obtains this buffer slot.
+	zeroBytes((*ptBufPtr)[:len(pt)])
+	noisePlainPool.Put(ptBufPtr)
 	return n, nil
+}
+
+// zeroBytes overwrites b with zeros to erase sensitive data.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // GenerateKeypair は新しい X25519 鍵ペアを生成する。
@@ -102,15 +159,51 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 	})
 }
 
+// DeriveChunkStreamKey derives a 32-byte symmetric key for a numbered chunk stream
+// from the control stream's established send/receive keys and a stream-specific label.
+//
+// #148: chunk streams must NOT perform a full Noise_XX handshake. Instead the
+// control stream's session material is used as the IKM for HKDF-SHA256 so that
+// every chunk stream is cryptographically bound to the authenticated control session.
+//
+// label format: "chunk-stream-<N>" (caller supplies the N).
+// ikm: concatenation of the control stream's enc key || dec key (each 32 bytes).
+func DeriveChunkStreamKey(encKey, decKey []byte, label string) ([]byte, error) {
+	if len(encKey) == 0 || len(decKey) == 0 {
+		return nil, fmt.Errorf("DeriveChunkStreamKey: enc/dec keys must not be empty")
+	}
+	ikm := make([]byte, len(encKey)+len(decKey))
+	copy(ikm, encKey)
+	copy(ikm[len(encKey):], decKey)
+
+	info := []byte(label)
+	r := hkdf.New(sha256.New, ikm, nil, info)
+
+	out := make([]byte, derivedKeyLen)
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, fmt.Errorf("DeriveChunkStreamKey: HKDF expansion failed: %w", err)
+	}
+
+	// Zero the IKM copy now that HKDF has consumed it.
+	zeroBytes(ikm)
+	return out, nil
+}
+
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: This function is intended for the *control stream only*.
+// Chunk streams must NOT call this; derive per-stream keys with DeriveChunkStreamKey
+// from the control stream's session keys instead.
+// TODO(#148): enforce at the type level — a ChunkStream constructor should accept
+// a derived key and refuse a HandshakeState.
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeInitiatorFull(rw, key)
 	return ns, err
 }
 
 // HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: control stream only — see HandshakeInitiator for the chunk-stream policy.
 func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeResponderFull(rw, key)
 	return ns, err
@@ -145,7 +238,8 @@ func HandshakeResponderFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []
 //	→ s, se           (msg3: initiator 送信 → 両側で CipherState 取得)
 //
 // CipherState の方向: cs0 = I→R (initiator enc / responder dec)
-//                     cs1 = R→I (responder enc / initiator dec)
+//
+//	cs1 = R→I (responder enc / initiator dec)
 func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, []byte, error) {
 	send := func() (*noise.CipherState, *noise.CipherState, error) {
 		msg, cs0, cs1, err := hs.WriteMessage(nil, nil)
@@ -163,12 +257,18 @@ func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStr
 		return cs0, cs1, nil
 	}
 
+	// #171: recv validates the length-prefixed handshake frame before allocating.
 	recv := func() (*noise.CipherState, *noise.CipherState, error) {
 		var lb [2]byte
 		if _, err := io.ReadFull(rw, lb[:]); err != nil {
 			return nil, nil, err
 		}
-		msg := make([]byte, binary.BigEndian.Uint16(lb[:]))
+		msgLen := binary.BigEndian.Uint16(lb[:])
+		// #171: Reject oversized handshake messages to prevent memory exhaustion.
+		if msgLen > maxHandshakeMsgLen {
+			return nil, nil, fmt.Errorf("noise handshake: message length %d exceeds maximum %d", msgLen, maxHandshakeMsgLen)
+		}
+		msg := make([]byte, msgLen)
 		if _, err := io.ReadFull(rw, msg); err != nil {
 			return nil, nil, err
 		}

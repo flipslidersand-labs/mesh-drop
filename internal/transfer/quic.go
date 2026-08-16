@@ -1,7 +1,11 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
@@ -23,35 +28,144 @@ import (
 // Meta.IsPipe=true   → doReceivePipeConn へ dispatch
 // それ以外           → doReceiveFileResume（resume 対応シングルファイル）
 
-// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
-func Listen(ctx context.Context, addr string) error {
-	tlsConf, err := serverTLS()
-	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
+// quicConfig returns a *quic.Config with idle timeout and keep-alive set.
+// #179: Prevent connections from hanging indefinitely by enforcing idle timeout.
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIdleTimeout:  120 * time.Second,
+		KeepAlivePeriod: 30 * time.Second,
 	}
-	ln, err := quic.ListenAddr(addr, tlsConf, nil)
+}
+
+// TLSBundle holds a self-signed TLS configuration and the SHA-256 fingerprint
+// of its certificate. Generate one with NewTLSBundle, then pass it to
+// ListenWithBundle so the same cert is used for both the TLS listener and the
+// mDNS fingerprint advertisement.
+// #160: Bundling cert + fingerprint together ensures they always match and
+// eliminates the race condition of generating two independent certificates.
+type TLSBundle struct {
+	Config      *tls.Config
+	Fingerprint []byte // SHA-256 of the DER-encoded leaf certificate
+}
+
+// NewTLSBundle generates a fresh self-signed certificate and returns a TLSBundle
+// containing the TLS config and its SHA-256 fingerprint.
+// #160: Call once, share between ListenWithBundle and mDNS Advertise.
+func NewTLSBundle() (*TLSBundle, error) {
+	cfg, fp, err := serverTLSAndFingerprint()
+	if err != nil {
+		return nil, err
+	}
+	return &TLSBundle{Config: cfg, Fingerprint: fp}, nil
+}
+
+// #160: serverTLSAndFingerprint generates a self-signed TLS cert and returns
+// both the *tls.Config for the listener and the SHA-256 fingerprint of the
+// DER-encoded certificate. The fingerprint is used by the sender to pin the
+// connection and prevent MITM via a forged self-signed cert.
+func serverTLSAndFingerprint() (*tls.Config, []byte, error) {
+	cfg, err := serverTLS()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cfg.Certificates) == 0 || len(cfg.Certificates[0].Certificate) == 0 {
+		return nil, nil, fmt.Errorf("serverTLS returned no certificate")
+	}
+	der := cfg.Certificates[0].Certificate[0]
+	sum := sha256.Sum256(der)
+	return cfg, sum[:], nil
+}
+
+// #160: clientTLSPinned returns a *tls.Config that pins the peer certificate to
+// the expected SHA-256 fingerprint. InsecureSkipVerify is set true to suppress
+// the default chain verification (cert is self-signed and has no CA), but the
+// custom VerifyPeerCertificate callback enforces the exact fingerprint instead.
+// This provides equivalent security to certificate pinning and prevents MITM.
+func clientTLSPinned(expectedFingerprint []byte) *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec — replaced by fingerprint pinning below
+		NextProtos:         []string{"meshdrop/1"},
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("TLS: peer sent no certificate")
+			}
+			sum := sha256.Sum256(rawCerts[0])
+			if !bytes.Equal(sum[:], expectedFingerprint) {
+				return fmt.Errorf("TLS: certificate fingerprint mismatch — possible MITM (got %x, want %x)",
+					sum[:8], expectedFingerprint[:8])
+			}
+			// Verify the certificate is self-signed (Issuer == Subject).
+			// This is an additional sanity check to ensure we are pinning a
+			// self-signed cert and not some CA-signed cert that happens to
+			// match the fingerprint via a hash collision.
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("TLS: could not parse peer certificate: %w", err)
+			}
+			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+				return fmt.Errorf("TLS: peer certificate is not self-signed")
+			}
+			return nil
+		},
+	}
+}
+
+// ListenWithBundle は TLSBundle を使って QUIC で 1 接続を待ち受ける。
+// TLSBundle は NewTLSBundle で生成し、同じ束を mDNS Advertise にも渡すことで
+// フィンガープリントと実際のサーバー証明書が必ず一致する。
+// #160: Use the pre-generated TLSBundle so the fingerprint advertised via mDNS
+// matches the TLS cert used by the listener.
+func ListenWithBundle(ctx context.Context, addr string, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
-// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
-func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
-	tlsConf, err := serverTLS()
-	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
-	}
-	ln, err := quic.Listen(udpConn, tlsConf, nil)
+// ListenNATWithBundle は TLSBundle を使って既存の UDP ソケット上で QUIC リスナーを起動する。
+// #160: Same as ListenWithBundle but for the NAT traversal path.
+func ListenNATWithBundle(ctx context.Context, udpConn *net.UDPConn, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.Listen(udpConn, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
+// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
+// Prefer ListenWithBundle when you also need to advertise the fingerprint via mDNS.
+func Listen(ctx context.Context, addr string) error {
+	// #160: Generate server cert and obtain fingerprint for out-of-band sharing.
+	// The fingerprint is printed so the user can pass it to the sender via --fingerprint.
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenWithBundle(ctx, addr, bundle)
+}
+
+// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
+// Prefer ListenNATWithBundle when you also need to advertise the fingerprint via mDNS.
+func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
+	// #160: Same as Listen but for the NAT traversal path.
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenNATWithBundle(ctx, udpConn, bundle)
+}
+
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
-func Send(ctx context.Context, addr, filePath string, nChunks int) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+// Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte) error {
+	tlsCfg := clientTLSForFingerprint(fingerprint)
+	conn, err := quic.DialAddr(ctx, addr, tlsCfg, quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -59,12 +173,46 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte) error {
+	tlsCfg := clientTLSForFingerprint(fingerprint)
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, tlsCfg, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
 	return doSend(ctx, conn, filePath, nChunks)
+}
+
+// clientTLSForFingerprint returns a pinned TLS config when a fingerprint is
+// provided, or a self-signed-only config when fingerprint is nil.
+// #160: Never use a fully open InsecureSkipVerify without at minimum checking
+// that the certificate is self-signed.
+func clientTLSForFingerprint(fingerprint []byte) *tls.Config {
+	if len(fingerprint) > 0 {
+		return clientTLSPinned(fingerprint)
+	}
+	// No fingerprint provided: fall back to checking that the cert is self-signed.
+	// This prevents connecting to a CA-issued cert (e.g. a proxy), but does not
+	// prevent a MITM that generates their own self-signed cert.
+	// Users should provide --fingerprint for full security.
+	fmt.Fprintln(os.Stderr, "WARNING: no --fingerprint provided; TLS is using self-signed-only check (weaker). Pass --fingerprint from the receiver for full MITM protection.")
+	return &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec — replaced by self-signed check below
+		NextProtos:         []string{"meshdrop/1"},
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("TLS: peer sent no certificate")
+			}
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("TLS: could not parse peer certificate: %w", err)
+			}
+			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+				return fmt.Errorf("TLS: peer certificate is not self-signed — possible MITM or misconfiguration")
+			}
+			return nil
+		},
+	}
 }
 
 // --- accept & dispatch ---
@@ -126,7 +274,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 		return Meta{}, nil, nil, err
 	}
 
-	if !meta.IsPipe && meta.Chunks < 1 {
+	if !meta.IsPipe && !meta.IsBatch && meta.Chunks < 0 {
 		return Meta{}, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
@@ -166,36 +314,64 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		return err
 	}
 
+	// #187: Hash the file using ReadAt from offset 0 via the already-open handle.
+	// This avoids closing and re-opening the file between hash computation and
+	// chunk transmission, eliminating the TOCTOU window where the file could
+	// be modified on disk between the hash pass and the data pass.
 	fmt.Printf("Hashing %s ...\n", filepath.Base(filePath))
-	hash, err := hashReader(f)
+	hash, err := hashFileAt(f, info.Size())
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
+	}
+
+	// #169: For zero-byte files use Chunks=0; the receiver completes immediately.
+	chunks := nChunks
+	if info.Size() == 0 {
+		chunks = 0
 	}
 
 	meta := Meta{
 		Name:   filepath.Base(filePath),
 		Size:   info.Size(),
 		Hash:   hash,
-		Chunks: nChunks,
+		Chunks: chunks,
 	}
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
 
-	skipSet := make(map[int]bool, len(rs.ChunksDone))
-	for _, idx := range rs.ChunksDone {
-		skipSet[idx] = true
+	// #169: Nothing to transfer for zero-byte files.
+	if chunks == 0 {
+		fmt.Printf("✓ Sent: %s (0 bytes, 0 chunks)\n", filePath)
+		return nil
 	}
-	if len(skipSet) > 0 {
-		fmt.Printf("  Resume: skipping %d/%d completed chunks\n", len(skipSet), nChunks)
+
+	// #174: Use []bool instead of map[int]bool for O(1) access with lower allocation overhead.
+	skipSet := make([]bool, nChunks)
+	skipCount := 0
+	for _, idx := range rs.ChunksDone {
+		// #168: Validate chunk index before using it.
+		if idx < 0 || idx >= chunks {
+			continue
+		}
+		if !skipSet[idx] {
+			skipSet[idx] = true
+			skipCount++
+		}
+	}
+	if skipCount > 0 {
+		fmt.Printf("  Resume: skipping %d/%d completed chunks\n", skipCount, nChunks)
 	}
 
 	chunkSize := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
 	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
 
 	// 完了済みチャンクは進捗バーだけ進める
-	for idx := range skipSet {
+	for idx, skip := range skipSet {
+		if !skip {
+			continue
+		}
 		off := int64(idx) * chunkSize
 		sz := chunkSize
 		if off+sz > info.Size() {
@@ -206,6 +382,8 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 
 	errs := make([]error, nChunks)
 	var wg sync.WaitGroup
+	// #147: Open the file once here and pass *os.File to sendChunk, which uses
+	// ReadAt for concurrent-safe access without seeking.
 	for i := 0; i < nChunks; i++ {
 		if skipSet[i] {
 			continue
@@ -218,7 +396,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar, peerKey)
+			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey)
 		}(i)
 	}
 	wg.Wait()
@@ -285,7 +463,7 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) error {
 	defer conn.CloseWithError(0, "done")
 
-	if meta.Chunks < 1 {
+	if meta.Chunks < 0 {
 		return fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
@@ -294,14 +472,23 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		cp = loadOrCreate(outPath, meta)
 	}
 
-	skipSet := make(map[int]bool)
+	// #174: Use []bool instead of map[int]bool for O(1) access with lower allocation overhead.
+	skipSet := make([]bool, meta.Chunks)
+	skipCount := 0
 	for _, idx := range cp.doneIndices() {
-		skipSet[idx] = true
+		// #168/#181: Validate index before using it.
+		if idx < 0 || idx >= meta.Chunks {
+			continue
+		}
+		if !skipSet[idx] {
+			skipSet[idx] = true
+			skipCount++
+		}
 	}
 
-	if len(skipSet) > 0 {
+	if skipCount > 0 {
 		fmt.Printf("Resuming: %s — %d/%d chunks already done\n",
-			meta.Name, len(skipSet), meta.Chunks)
+			meta.Name, skipCount, meta.Chunks)
 	} else {
 		fmt.Printf("Receiving: %s  %d bytes  %d chunk(s)\n",
 			meta.Name, meta.Size, meta.Chunks)
@@ -323,11 +510,36 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		}
 	}
 
+	// #169: Zero-byte file — nothing to receive, just verify hash and finish.
+	if meta.Chunks == 0 {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			f.Close()
+			return err
+		}
+		got, err := hashReader(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if meta.Hash != "" && got != meta.Hash {
+			_ = os.Remove(outPath)
+			cp.finish()
+			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+		}
+		cp.finish()
+		fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
+		fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
+		return nil
+	}
+
 	bar := progressbar.DefaultBytes(meta.Size, "receiving")
 
 	// 完了済みチャンクは進捗バーだけ進める
 	chunkSize := (meta.Size + int64(meta.Chunks) - 1) / int64(meta.Chunks)
-	for idx := range skipSet {
+	for idx, skip := range skipSet {
+		if !skip {
+			continue
+		}
 		off := int64(idx) * chunkSize
 		sz := chunkSize
 		if off+sz > meta.Size {
@@ -336,11 +548,21 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		_, _ = bar.Write(make([]byte, sz))
 	}
 
-	remaining := meta.Chunks - len(skipSet)
+	remaining := meta.Chunks - skipCount
 	if remaining < 0 {
 		remaining = 0
 	}
 	errCh := make(chan error, remaining)
+
+	// #153: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
+	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
+	var closeOnce sync.Once
+	closeConn := func(cerr error) {
+		closeOnce.Do(func() {
+			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
+		})
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < remaining; i++ {
 		wg.Add(1)
@@ -348,6 +570,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			defer wg.Done()
 			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
 			if aerr != nil {
+				closeConn(aerr)
 				errCh <- aerr
 				return
 			}
@@ -392,7 +615,9 @@ func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []by
 
 // --- stream helpers ---
 
-func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
+// sendChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
+// #147: f は呼び出し元で一度だけ開かれた *os.File。ReadAt を使うため seek 不要で並列安全。
+func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
@@ -408,15 +633,12 @@ func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int,
 		return fmt.Errorf("chunk %d meta: %w", index, err)
 	}
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return err
+	// #147: Use ReadAt for concurrent-safe reads without seeking.
+	buf := make([]byte, size)
+	if _, err := f.ReadAt(buf, offset); err != nil {
+		return fmt.Errorf("chunk %d read: %w", index, err)
 	}
-	defer f.Close()
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return err
-	}
-	_, err = io.CopyN(io.MultiWriter(ns, bar), f, size)
+	_, err = io.MultiWriter(ns, bar).Write(buf)
 	return err
 }
 
@@ -442,6 +664,7 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 
 // acceptChunkWithMeta はチャンクを受信し ChunkMeta を返す（resume でのインデックス記録用）。
 // peerKey は制御ストリームで確認したピアの静的公開鍵。
+// #184: チャンクのバイト範囲が non-overlapping かつファイルサイズ内に収まることを検証する。
 func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) (ChunkMeta, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
@@ -458,11 +681,14 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
 	}
+	// #184: Offset と Size が非負であることを確認する。
 	if cm.Offset < 0 || cm.Size < 0 {
 		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
 	}
-	if info, err := f.Stat(); err == nil {
-		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
+	// #184: チャンク範囲がファイルサイズを超えないことを確認する。
+	// ファイルは Truncate 済みなので Stat の結果は信頼できる。
+	if finfo, serr := f.Stat(); serr == nil {
+		if fileSize := finfo.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
 			return ChunkMeta{}, fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
 				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
 		}
