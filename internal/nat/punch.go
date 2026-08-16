@@ -12,8 +12,8 @@ import (
 // Must complete before the caller passes conn to quic.Listen / quic.Dial
 // to avoid concurrent writes on the same UDPConn.
 func HolePunch(ctx context.Context, conn *net.UDPConn, peerAddr *net.UDPAddr, count int, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for i := 0; i < count; i++ {
 		select {
 		case <-ctx.Done():
@@ -21,10 +21,17 @@ func HolePunch(ctx context.Context, conn *net.UDPConn, peerAddr *net.UDPAddr, co
 		default:
 		}
 		_, _ = conn.WriteToUDP([]byte{0x00}, peerAddr)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }

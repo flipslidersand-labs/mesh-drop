@@ -141,7 +141,8 @@ func readMeta(r io.Reader) (Meta, error) {
 		if m.Size < 0 || m.Size > maxFileSize {
 			return Meta{}, fmt.Errorf("meta.Size out of range: %d", m.Size)
 		}
-		if m.Chunks < 1 || m.Chunks > maxChunks {
+		// #169: Chunks==0 is valid for zero-byte files. Only reject negative values.
+		if m.Chunks < 0 || m.Chunks > maxChunks {
 			return Meta{}, fmt.Errorf("meta.Chunks out of range: %d", m.Chunks)
 		}
 	}
