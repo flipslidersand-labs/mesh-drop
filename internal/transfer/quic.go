@@ -532,12 +532,10 @@ func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offs
 		return fmt.Errorf("chunk %d meta: %w", index, err)
 	}
 
-	// #147: Use ReadAt for concurrent-safe reads without seeking.
-	buf := make([]byte, size)
-	if _, err := f.ReadAt(buf, offset); err != nil {
-		return fmt.Errorf("chunk %d read: %w", index, err)
-	}
-	_, err = io.MultiWriter(ns, bar).Write(buf)
+	// #217: SectionReader で offset/size をストリーミング送信。
+	// ReadAt ベースなので concurrent-safe かつ full-size バッファ確保不要。
+	sr := io.NewSectionReader(f, offset, size)
+	_, err = io.Copy(io.MultiWriter(ns, bar), sr)
 	return err
 }
 
