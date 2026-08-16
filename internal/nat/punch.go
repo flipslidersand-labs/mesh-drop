@@ -11,6 +11,10 @@ import (
 // Blocks until count packets are sent or ctx is cancelled (e.g. Ctrl+C).
 // Must complete before the caller passes conn to quic.Listen / quic.Dial
 // to avoid concurrent writes on the same UDPConn.
+//
+// #146: The caller owns conn and is responsible for closing it (e.g. via
+// defer udpConn.Close() before calling HolePunch). HolePunch does not close
+// conn because it is reused for QUIC after punching completes.
 func HolePunch(ctx context.Context, conn *net.UDPConn, peerAddr *net.UDPAddr, count int, interval time.Duration) {
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
