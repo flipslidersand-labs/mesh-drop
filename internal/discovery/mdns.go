@@ -55,6 +55,11 @@ func Advertise(ctx context.Context, port int, fingerprint []byte) error {
 
 	server, err := zeroconf.Register(instance, ServiceType, Domain, port, txt, nil)
 	if err != nil {
+		// #185: mDNS 登録失敗時はフォールバック案内を stderr に出力する。
+		// ユーザーが何もせずサイレントに失敗するのではなく、--relay フラグで
+		// リレーサーバーを使う方法を知れるようにする。
+		fmt.Fprintf(os.Stderr, "mDNS advertise failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Tip: if mDNS is unavailable on this network, use --relay <url> for NAT traversal instead.\n")
 		return fmt.Errorf("mDNS register: %w", err)
 	}
 	defer server.Shutdown()

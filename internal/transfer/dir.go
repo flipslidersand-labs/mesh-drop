@@ -303,7 +303,11 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if err != nil {
 			return fmt.Errorf("resolve path %s: %w", fm.Path, err)
 		}
-		if !strings.HasPrefix(absOut, absBase+string(os.PathSeparator)) {
+		// #163: filepath.Rel ベースのパストラバーサル検証。
+		// strings.HasPrefix は "/" と "/foo/../.." のようなケースで誤検知する可能性があるため
+		// filepath.Rel で正規化されたパスが ".." で始まらないことを確認する。
+		rel, relErr := filepath.Rel(absBase, absOut)
+		if relErr != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("path traversal detected: %s", fm.Path)
 		}
 		// #183: Use 0755 for directories and 0644 for files as default permissions.
