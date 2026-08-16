@@ -2,14 +2,12 @@ package crypto
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
 
 	"github.com/flynn/noise"
-	"golang.org/x/crypto/hkdf"
 )
 
 // noiseReadPool pools ciphertext read buffers (max Noise frame = 65535 bytes).
@@ -165,36 +163,6 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 		Initiator:     initiator,
 		StaticKeypair: key,
 	})
-}
-
-// DeriveChunkStreamKey derives a 32-byte symmetric key for a numbered chunk stream
-// from the control stream's established send/receive keys and a stream-specific label.
-//
-// #148: chunk streams must NOT perform a full Noise_XX handshake. Instead the
-// control stream's session material is used as the IKM for HKDF-SHA256 so that
-// every chunk stream is cryptographically bound to the authenticated control session.
-//
-// label format: "chunk-stream-<N>" (caller supplies the N).
-// ikm: concatenation of the control stream's enc key || dec key (each 32 bytes).
-func DeriveChunkStreamKey(encKey, decKey []byte, label string) ([]byte, error) {
-	if len(encKey) == 0 || len(decKey) == 0 {
-		return nil, fmt.Errorf("DeriveChunkStreamKey: enc/dec keys must not be empty")
-	}
-	ikm := make([]byte, len(encKey)+len(decKey))
-	copy(ikm, encKey)
-	copy(ikm[len(encKey):], decKey)
-
-	info := []byte(label)
-	r := hkdf.New(sha256.New, ikm, nil, info)
-
-	out := make([]byte, derivedKeyLen)
-	if _, err := io.ReadFull(r, out); err != nil {
-		return nil, fmt.Errorf("DeriveChunkStreamKey: HKDF expansion failed: %w", err)
-	}
-
-	// Zero the IKM copy now that HKDF has consumed it.
-	zeroBytes(ikm)
-	return out, nil
 }
 
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
