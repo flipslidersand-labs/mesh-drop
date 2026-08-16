@@ -55,6 +55,11 @@ func Advertise(ctx context.Context, port int, fingerprint []byte) error {
 
 	server, err := zeroconf.Register(instance, ServiceType, Domain, port, txt, nil)
 	if err != nil {
+		// #212: ctx がキャンセル済みの場合は mDNS 失敗が想定内なので hint を出さない。
+		if ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "mDNS advertise failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Tip: if mDNS is unavailable on this network, use --relay <url> for NAT traversal instead.\n")
+		}
 		return fmt.Errorf("mDNS register: %w", err)
 	}
 	defer server.Shutdown()
