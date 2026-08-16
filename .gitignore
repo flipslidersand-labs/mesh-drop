@@ -36,3 +36,10 @@ coverage/
 *.log
 logs/
 node_modules
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.secret
+credentials.*
