@@ -42,6 +42,9 @@ const maxChunk = 65000 // Noise メッセージあたりの最大平文バイト
 // #171: Reject oversized handshake frames before allocating memory.
 const maxHandshakeMsgLen = uint16(4096)
 
+// derivedKeyLen is the length in bytes of a key derived for a chunk stream.
+const derivedKeyLen = 32
+
 // NoiseStream は io.ReadWriter を Noise トランスポート暗号化でラップする。
 type NoiseStream struct {
 	rw   io.ReadWriter
@@ -91,7 +94,6 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 func (s *NoiseStream) Read(p []byte) (int, error) {
 	if len(s.rbuf) > 0 {
 		n := copy(p, s.rbuf)
-		clear(s.rbuf[:n]) // #211: 消費済み平文をゼロ化してメモリ残留を防ぐ
 		s.rbuf = s.rbuf[n:]
 		return n, nil
 	}
@@ -121,6 +123,8 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	noiseReadPool.Put(ctBufPtr)
 
 	if err != nil {
+		// #166: zero before pool return even on error path.
+		zeroBytes(*ptBufPtr)
 		noisePlainPool.Put(ptBufPtr)
 		return 0, fmt.Errorf("noise decrypt: %w", err)
 	}
@@ -129,9 +133,20 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)
 	}
-	clear(pt) // #211: プール返却前に平文をゼロ化（オーバーフロー分は s.rbuf にコピー済み）
+
+	// #166: zero the decrypted plaintext region before returning to the pool.
+	// sync.Pool buffers are shared across goroutines; residual plaintext must not
+	// leak to the next caller that obtains this buffer slot.
+	zeroBytes((*ptBufPtr)[:len(pt)])
 	noisePlainPool.Put(ptBufPtr)
 	return n, nil
+}
+
+// zeroBytes overwrites b with zeros to erase sensitive data.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // GenerateKeypair は新しい X25519 鍵ペアを生成する。
@@ -151,14 +166,20 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 }
 
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: This function is intended for the *control stream only*.
+// Chunk streams must NOT call this; derive per-stream keys with DeriveChunkStreamKey
+// from the control stream's session keys instead.
+// TODO(#148): enforce at the type level — a ChunkStream constructor should accept
+// a derived key and refuse a HandshakeState.
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeInitiatorFull(rw, key)
 	return ns, err
 }
 
 // HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
-// チャンクストリーム等の ephemeral 用途向け（ピア静的鍵は破棄）。
+//
+// #148 NOTE: control stream only — see HandshakeInitiator for the chunk-stream policy.
 func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeResponderFull(rw, key)
 	return ns, err

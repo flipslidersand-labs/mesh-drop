@@ -154,6 +154,26 @@ func BenchmarkNoiseHandshake(b *testing.B) {
 	}
 }
 
+// BenchmarkDeriveChunkStreamKey measures the HKDF key-derivation cost per
+// chunk stream.  In a typical transfer the sender calls this once per data
+// stream (up to maxChunks=65536 times), so latency here matters.
+func BenchmarkDeriveChunkStreamKey(b *testing.B) {
+	encKey := make([]byte, 32)
+	decKey := make([]byte, 32)
+	for i := range encKey {
+		encKey[i] = byte(i)
+		decKey[i] = byte(255 - i)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := DeriveChunkStreamKey(encKey, decKey, "chunk-stream-0")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkNoiseStreamWrite_Parallel measures concurrent write throughput
 // when multiple goroutines share independent NoiseStream pairs.  This
 // simulates the multi-chunk parallel transfer path.

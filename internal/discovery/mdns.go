@@ -121,6 +121,8 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 	return peers, nil
 }
 
+// hexDecodeFingerprint decodes a hex string into bytes.
+// Returns an error if the string is not valid hex.
 func hexDecodeFingerprint(s string) ([]byte, error) {
 	if len(s)%2 != 0 {
 		return nil, fmt.Errorf("odd hex length")

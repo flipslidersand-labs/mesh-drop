@@ -7,11 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/sync/errgroup"
 )
 
 type fileHandle struct {
@@ -26,10 +28,20 @@ type chunkAssignment struct {
 	size      int64
 }
 
+// walkEntry holds the raw info collected during filepath.Walk before hashing.
+type walkEntry struct {
+	absPath string
+	rel     string
+	size    int64
+}
+
 // WalkDir はディレクトリを再帰的に走査して FileMeta リストを返す。
+// BLAKE3 ハッシュは runtime.NumCPU() 個のゴルーチンで並列計算する。
 func WalkDir(dirPath string) ([]FileMeta, error) {
-	var files []FileMeta
 	base := filepath.Clean(dirPath)
+
+	// Phase 1: collect entries sequentially (filesystem metadata only, no I/O).
+	var entries []walkEntry
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -41,19 +53,61 @@ func WalkDir(dirPath string) ([]FileMeta, error) {
 		if err != nil {
 			return err
 		}
-		fh, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		hash, err := hashReader(fh)
-		fh.Close()
-		if err != nil {
-			return fmt.Errorf("hash %s: %w", rel, err)
-		}
-		files = append(files, FileMeta{Path: rel, Size: info.Size(), Hash: hash})
+		entries = append(entries, walkEntry{absPath: path, rel: rel, size: info.Size()})
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 2: hash files in parallel with a worker pool.
+	files := make([]FileMeta, len(entries))
+
+	type job struct {
+		idx   int
+		entry walkEntry
+	}
+
+	concurrency := runtime.NumCPU()
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	jobCh := make(chan job, len(entries))
+	for i, e := range entries {
+		jobCh <- job{idx: i, entry: e}
+	}
+	close(jobCh)
+
+	g, _ := errgroup.WithContext(context.Background())
+
+	for w := 0; w < concurrency; w++ {
+		g.Go(func() error {
+			for j := range jobCh {
+				fh, err := os.Open(j.entry.absPath)
+				if err != nil {
+					return err
+				}
+				hash, err := hashReader(fh)
+				fh.Close()
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", j.entry.rel, err)
+				}
+				// Each goroutine writes to a unique index: no mutex needed.
+				files[j.idx] = FileMeta{
+					Path: j.entry.rel,
+					Size: j.entry.size,
+					Hash: hash,
+				}
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // assignChunks はファイルリストを nChunks 個のチャンクに分割する。
@@ -252,7 +306,11 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if err != nil {
 			return fmt.Errorf("resolve path %s: %w", fm.Path, err)
 		}
-		if !strings.HasPrefix(absOut, absBase+string(os.PathSeparator)) {
+		// #163: filepath.Rel ベースのパストラバーサル検証。
+		// strings.HasPrefix は "/" と "/foo/../.." のようなケースで誤検知する可能性があるため
+		// filepath.Rel で正規化されたパスが ".." で始まらないことを確認する。
+		rel, relErr := filepath.Rel(absBase, absOut)
+		if relErr != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("path traversal detected: %s", fm.Path)
 		}
 		// #183: Use 0755 for directories and 0644 for files as default permissions.
