@@ -22,6 +22,7 @@ type RelayServer struct {
 	ipRate         map[string]*ipBucket // handleJoin の IP ベースレート制限
 	ipCreateRate   map[string]*ipBucket // handleCreate の IP ベースレート制限 (#164)
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
+	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
 }
 
 // ipBucket は IP ごとのスライディングウィンドウカウンタ。
@@ -78,6 +79,7 @@ func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
 		ipRate:         make(map[string]*ipBucket),
 		ipCreateRate:   make(map[string]*ipBucket),
 		trustedProxies: trustedProxies,
+		stopEvict:      make(chan struct{}),
 	}
 	// #176/#180: 定期的に期限切れレートバケットを退避してマップ肥大化を防ぐ。
 	go s.evictExpiredBuckets()
@@ -86,10 +88,16 @@ func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
 
 // evictExpiredBuckets は定期的に ipRate / ipCreateRate から期限切れエントリを削除する。
 // #176/#180: unbounded growth 対策。ウィンドウ + 猶予期間を超えたバケットを削除する。
+// #208: stopEvict が close されると即座に返り、goroutine リークを防ぐ。
 func (s *RelayServer) evictExpiredBuckets() {
 	ticker := time.NewTicker(rateWindow)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-s.stopEvict:
+			return
+		case <-ticker.C:
+		}
 		cutoff := time.Now().Add(-(rateWindow + rateBucketGrace))
 		s.mu.Lock()
 		for ip, b := range s.ipRate {
@@ -103,6 +111,16 @@ func (s *RelayServer) evictExpiredBuckets() {
 			}
 		}
 		s.mu.Unlock()
+	}
+}
+
+// Stop は evictExpiredBuckets goroutine を停止する。
+// #208: Start/StartTLS が返った後に呼ぶことで goroutine リークを防ぐ。
+func (s *RelayServer) Stop() {
+	select {
+	case <-s.stopEvict:
+	default:
+		close(s.stopEvict)
 	}
 }
 
@@ -204,7 +222,9 @@ func (s *RelayServer) Start(addr string) error {
 // StartTLS は addr でリレーサーバーを起動する (ブロッキング)。
 // certFile, keyFile が指定されている場合は HTTPS で起動し、
 // 両方が空の場合は HTTP で起動する。
+// #208: サーバー停止時に evictExpiredBuckets goroutine を確実に停止する。
 func (s *RelayServer) StartTLS(addr, certFile, keyFile string) error {
+	defer s.Stop()
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      s.Handler(),
