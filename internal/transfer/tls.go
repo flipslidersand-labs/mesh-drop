@@ -98,6 +98,10 @@ func clientTLSPinned(expectedFingerprint []byte) *tls.Config {
 			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
 				return fmt.Errorf("TLS: peer certificate is not self-signed")
 			}
+			// #210: DN 一致だけでは不十分。署名自体も検証する。
+			if err := cert.CheckSignatureFrom(cert); err != nil {
+				return fmt.Errorf("TLS: peer certificate signature invalid: %w", err)
+			}
 			return nil
 		},
 	}
@@ -125,6 +129,10 @@ func clientTLSForFingerprint(fingerprint []byte) *tls.Config {
 			}
 			if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
 				return fmt.Errorf("TLS: peer certificate is not self-signed — possible MITM or misconfiguration")
+			}
+			// #210: DN 一致だけでは不十分。署名自体も検証する。
+			if err := cert.CheckSignatureFrom(cert); err != nil {
+				return fmt.Errorf("TLS: peer certificate signature invalid: %w", err)
 			}
 			return nil
 		},
