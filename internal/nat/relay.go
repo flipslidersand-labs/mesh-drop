@@ -22,6 +22,8 @@ type RelayServer struct {
 	ipRate         map[string]*ipBucket // handleJoin の IP ベースレート制限
 	ipCreateRate   map[string]*ipBucket // handleCreate の IP ベースレート制限 (#164)
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
+	trustedCIDRs   []*net.IPNet         // #214: 起動時に一度 parse した CIDR リスト
+	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
 }
 
 // ipBucket は IP ごとのスライディングウィンドウカウンタ。
@@ -34,7 +36,7 @@ type ipBucket struct {
 const maxSessions = 10_000
 
 // sessionTTL は handleJoin が一度も呼ばれなかったセッションの有効期限。
-// handleJoin 内の long-poll タイムアウト (60s) より余裕を持たせる。
+// handleJoin 内の long-poll タイムアウト (30s) より余裕を持たせる。
 const sessionTTL = 70 * time.Second
 
 // rateWindow / rateMaxJoin はコード総当たり攻撃を緩和するレート制限定数。
@@ -55,11 +57,18 @@ const rateBucketGrace = rateWindow
 const joinWaitTimeout = 30 * time.Second
 
 type rdv struct {
-	mu      sync.Mutex   // addrA / paired の読み書きを保護する
-	addrA   string       // 最初に登録したピア (受信側)
-	paired  bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
-	chB     chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
-	done    chan struct{} // ランデブー完了またはタイムアウトで close される
+	mu       sync.Mutex   // addrA / paired の読み書きを保護する
+	addrA    string       // 最初に登録したピア (受信側)
+	paired   bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
+	chB      chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
+	done     chan struct{} // ランデブー完了またはタイムアウトで close される
+	doneOnce sync.Once    // #215: done の二重 close を防ぐ
+}
+
+// closeDone は sess.done を一度だけ close する。
+// #215: safe-close イディオムを1か所に集約し、コピペによる漏れを排除する。
+func (r *rdv) closeDone() {
+	r.doneOnce.Do(func() { close(r.done) })
 }
 
 // NewRelayServer は信頼プロキシなしのリレーサーバーを生成する。
@@ -73,11 +82,20 @@ func NewRelayServer() *RelayServer {
 // X-Forwarded-For / X-Real-IP をクライアント IP として採用する。
 // #162: CIDR 表記をサポートする。
 func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
+	// #214: CIDR を起動時に一度だけ parse してリクエストごとのアロケーションを排除する。
+	var cidrs []*net.IPNet
+	for _, entry := range trustedProxies {
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			cidrs = append(cidrs, network)
+		}
+	}
 	s := &RelayServer{
 		sessions:       make(map[string]*rdv),
 		ipRate:         make(map[string]*ipBucket),
 		ipCreateRate:   make(map[string]*ipBucket),
 		trustedProxies: trustedProxies,
+		trustedCIDRs:   cidrs,
+		stopEvict:      make(chan struct{}),
 	}
 	// #176/#180: 定期的に期限切れレートバケットを退避してマップ肥大化を防ぐ。
 	go s.evictExpiredBuckets()
@@ -86,10 +104,16 @@ func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
 
 // evictExpiredBuckets は定期的に ipRate / ipCreateRate から期限切れエントリを削除する。
 // #176/#180: unbounded growth 対策。ウィンドウ + 猶予期間を超えたバケットを削除する。
+// #208: stopEvict が close されると即座に返り、goroutine リークを防ぐ。
 func (s *RelayServer) evictExpiredBuckets() {
 	ticker := time.NewTicker(rateWindow)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-s.stopEvict:
+			return
+		case <-ticker.C:
+		}
 		cutoff := time.Now().Add(-(rateWindow + rateBucketGrace))
 		s.mu.Lock()
 		for ip, b := range s.ipRate {
@@ -106,22 +130,38 @@ func (s *RelayServer) evictExpiredBuckets() {
 	}
 }
 
+// safeClose はチャネルを冪等に close する。
+// #215: 同一 select パターンが複数箇所に存在したためヘルパーに集約。
+func safeClose(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+// Stop は evictExpiredBuckets goroutine を停止する。
+// #208: Start/StartTLS が返った後に呼ぶことで goroutine リークを防ぐ。
+func (s *RelayServer) Stop() {
+	safeClose(s.stopEvict)
+}
+
 // isTrustedProxy は ip が trustedProxies リストに含まれるか（完全一致または CIDR）を返す。
 // #162: CIDR 表記のサポートを追加。
-// trustedProxies はイミュータブルなのでミューテックスなしで安全に参照できる。
+// #214: CIDR は起動時に parse 済みの trustedCIDRs を使いリクエストごとのアロケーションを排除。
+// trustedProxies / trustedCIDRs はイミュータブルなのでミューテックスなしで安全に参照できる。
 func (s *RelayServer) isTrustedProxy(ip string) bool {
-	parsed := net.ParseIP(ip)
 	for _, entry := range s.trustedProxies {
-		// まず完全一致を試みる
 		if entry == ip {
 			return true
 		}
-		// CIDR 表記として解釈を試みる
-		_, network, err := net.ParseCIDR(entry)
-		if err != nil {
-			continue
-		}
-		if parsed != nil && network.Contains(parsed) {
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, network := range s.trustedCIDRs {
+		if network.Contains(parsed) {
 			return true
 		}
 	}
@@ -204,12 +244,14 @@ func (s *RelayServer) Start(addr string) error {
 // StartTLS は addr でリレーサーバーを起動する (ブロッキング)。
 // certFile, keyFile が指定されている場合は HTTPS で起動し、
 // 両方が空の場合は HTTP で起動する。
+// #208: サーバー停止時に evictExpiredBuckets goroutine を確実に停止する。
 func (s *RelayServer) StartTLS(addr, certFile, keyFile string) error {
+	defer s.Stop()
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      s.Handler(),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 60s
+		WriteTimeout: 70 * time.Second, // rendezvous long-poll は最大 30s、余裕を持たせて 70s
 		IdleTimeout:  60 * time.Second,
 	}
 	if certFile != "" && keyFile != "" {
@@ -266,13 +308,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			// done を close して待機中の goroutine を解放する。
-			// 二重 close を防ぐため select で確認する。
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 		}
 	}()
 
@@ -357,20 +393,12 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 		case <-joinCtx.Done():
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 			http.Error(w, "timeout: peer did not connect within 30s", http.StatusRequestTimeout)
 			return
 		}

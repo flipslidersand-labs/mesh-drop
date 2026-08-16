@@ -165,8 +165,10 @@ func totalDirSize(files []FileMeta) int64 {
 }
 
 // SendDir はディレクトリ dirPath を相手 addr へバッチ転送する。
-func SendDir(ctx context.Context, addr, dirPath string, nChunks int) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
+// #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+// Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
+func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte) error {
+	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -174,8 +176,9 @@ func SendDir(ctx context.Context, addr, dirPath string, nChunks int) error {
 }
 
 // SendDirNAT は NAT Traversal 済みソケット経由でディレクトリを転送する。
-func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
+// #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte) error {
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}

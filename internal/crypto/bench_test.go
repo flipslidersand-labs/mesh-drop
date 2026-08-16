@@ -64,7 +64,8 @@ func BenchmarkNoiseStreamWrite(b *testing.B) {
 		tc := tc
 		b.Run(tc.name, func(b *testing.B) {
 			initStream, respStream, cleanup := setupNoiseStream(b)
-			defer cleanup()
+			// #209: cleanup は defer ではなく <-done の直前に明示呼び出し。
+			// defer だと drain goroutine が EOF を受け取る前に <-done がデッドロックする。
 
 			payload := make([]byte, tc.size)
 			for i := range payload {
@@ -92,6 +93,7 @@ func BenchmarkNoiseStreamWrite(b *testing.B) {
 				}
 			}
 			b.StopTimer()
+			cleanup() // pipe を閉じて drain goroutine に EOF を届ける
 			<-done
 		})
 	}
@@ -180,7 +182,8 @@ func BenchmarkNoiseStreamWrite_Parallel(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		initStream, respStream, cleanup := setupNoiseStream(b)
-		defer cleanup()
+		// #209: cleanup は defer ではなく <-done の直前に明示呼び出し。
+		// defer だと drain goroutine が EOF を受け取る前に <-done がデッドロックする。
 
 		payload := make([]byte, msgSize)
 		discard := make([]byte, msgSize)
@@ -198,9 +201,10 @@ func BenchmarkNoiseStreamWrite_Parallel(b *testing.B) {
 		for pb.Next() {
 			if _, err := initStream.Write(payload); err != nil {
 				b.Error(err)
-				return
+				break // #209: return ではなく break で cleanup まで到達させる
 			}
 		}
+		cleanup() // pipe を閉じて drain goroutine に EOF を届ける
 		<-done
 	})
 }

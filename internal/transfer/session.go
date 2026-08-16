@@ -23,7 +23,7 @@ var sessionIdentity noise.DHKey
 var sessionPeers *crypto.KnownPeers
 
 var (
-	initMu        sync.Mutex
+	initMu        sync.RWMutex // #218: localKey の並列読み取りを許容するため RWMutex に変更
 	sessionInited bool
 )
 
@@ -49,8 +49,11 @@ func InitSession() error {
 
 // localKey は sessionIdentity が設定されていればそれを、なければ ephemeral 鍵を返す。
 func localKey() (noise.DHKey, error) {
-	if len(sessionIdentity.Private) > 0 {
-		return sessionIdentity, nil
+	initMu.RLock()
+	key := sessionIdentity
+	initMu.RUnlock()
+	if len(key.Private) > 0 {
+		return key, nil
 	}
 	return crypto.GenerateKeypair()
 }
