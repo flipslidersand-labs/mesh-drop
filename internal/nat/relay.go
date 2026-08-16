@@ -57,11 +57,18 @@ const rateBucketGrace = rateWindow
 const joinWaitTimeout = 30 * time.Second
 
 type rdv struct {
-	mu      sync.Mutex   // addrA / paired の読み書きを保護する
-	addrA   string       // 最初に登録したピア (受信側)
-	paired  bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
-	chB     chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
-	done    chan struct{} // ランデブー完了またはタイムアウトで close される
+	mu       sync.Mutex   // addrA / paired の読み書きを保護する
+	addrA    string       // 最初に登録したピア (受信側)
+	paired   bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
+	chB      chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
+	done     chan struct{} // ランデブー完了またはタイムアウトで close される
+	doneOnce sync.Once    // #215: done の二重 close を防ぐ
+}
+
+// closeDone は sess.done を一度だけ close する。
+// #215: safe-close イディオムを1か所に集約し、コピペによる漏れを排除する。
+func (r *rdv) closeDone() {
+	r.doneOnce.Do(func() { close(r.done) })
 }
 
 // NewRelayServer は信頼プロキシなしのリレーサーバーを生成する。
@@ -123,14 +130,20 @@ func (s *RelayServer) evictExpiredBuckets() {
 	}
 }
 
+// safeClose はチャネルを冪等に close する。
+// #215: 同一 select パターンが複数箇所に存在したためヘルパーに集約。
+func safeClose(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
 // Stop は evictExpiredBuckets goroutine を停止する。
 // #208: Start/StartTLS が返った後に呼ぶことで goroutine リークを防ぐ。
 func (s *RelayServer) Stop() {
-	select {
-	case <-s.stopEvict:
-	default:
-		close(s.stopEvict)
-	}
+	safeClose(s.stopEvict)
 }
 
 // isTrustedProxy は ip が trustedProxies リストに含まれるか（完全一致または CIDR）を返す。
@@ -295,13 +308,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			// done を close して待機中の goroutine を解放する。
-			// 二重 close を防ぐため select で確認する。
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 		}
 	}()
 
@@ -386,20 +393,12 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 		case <-joinCtx.Done():
 			s.mu.Lock()
 			delete(s.sessions, code)
 			s.mu.Unlock()
-			select {
-			case <-sess.done:
-			default:
-				close(sess.done)
-			}
+			sess.closeDone()
 			http.Error(w, "timeout: peer did not connect within 30s", http.StatusRequestTimeout)
 			return
 		}
