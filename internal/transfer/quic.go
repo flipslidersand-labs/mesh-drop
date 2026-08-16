@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -33,35 +34,74 @@ func quicConfig() *quic.Config {
 	}
 }
 
-// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
-func Listen(ctx context.Context, addr string) error {
-	tlsConf, err := serverTLS()
+// TLSBundle holds a self-signed TLS configuration and the SHA-256 fingerprint
+// of its certificate. Generate one with NewTLSBundle, then pass it to
+// ListenWithBundle so the same cert is used for both the TLS listener and the
+// mDNS fingerprint advertisement.
+// #160: Bundling cert + fingerprint together ensures they always match and
+// eliminates the race condition of generating two independent certificates.
+type TLSBundle struct {
+	Config      *tls.Config
+	Fingerprint []byte // SHA-256 of the DER-encoded leaf certificate
+}
+
+// NewTLSBundle generates a fresh self-signed certificate and returns a TLSBundle
+// containing the TLS config and its SHA-256 fingerprint.
+func NewTLSBundle() (*TLSBundle, error) {
+	cfg, fp, err := serverTLSAndFingerprint()
 	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
+		return nil, err
 	}
-	ln, err := quic.ListenAddr(addr, tlsConf, quicConfig())
+	return &TLSBundle{Config: cfg, Fingerprint: fp}, nil
+}
+
+// ListenWithBundle は TLSBundle を使って QUIC で 1 接続を待ち受ける。
+// #160: Use the pre-generated TLSBundle so the fingerprint advertised via mDNS
+// matches the TLS cert used by the listener.
+func ListenWithBundle(ctx context.Context, addr string, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
-// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
-func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
-	tlsConf, err := serverTLS()
-	if err != nil {
-		return fmt.Errorf("TLS setup: %w", err)
-	}
-	ln, err := quic.Listen(udpConn, tlsConf, quicConfig())
+// ListenNATWithBundle は TLSBundle を使って既存の UDP ソケット上で QUIC リスナーを起動する。
+func ListenNATWithBundle(ctx context.Context, udpConn *net.UDPConn, bundle *TLSBundle) error {
+	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
+	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
+	ln, err := quic.Listen(udpConn, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
 	return acceptAndDispatch(ctx, ln)
 }
 
+// Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
+func Listen(ctx context.Context, addr string) error {
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenWithBundle(ctx, addr, bundle)
+}
+
+// ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
+func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+	return ListenNATWithBundle(ctx, udpConn, bundle)
+}
+
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
-func Send(ctx context.Context, addr, filePath string, nChunks int) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), quicConfig())
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+// Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte) error {
+	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -69,8 +109,9 @@ func Send(ctx context.Context, addr, filePath string, nChunks int) error {
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), quicConfig())
+// #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte) error {
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -101,19 +102,25 @@ func cmdReceive() *cobra.Command {
 
 			if pipe {
 				go func() {
-					if err := discovery.Advertise(ctx, port); err != nil && !errors.Is(err, context.Canceled) {
+					if err := discovery.Advertise(ctx, port, nil); err != nil && !errors.Is(err, context.Canceled) {
 						log.Printf("mDNS: %v", err)
 					}
 				}()
 				return transfer.ListenPipe(ctx, addr)
 			}
 
+			// #160: Generate TLS cert bundle once so the same cert fingerprint is
+			// advertised via mDNS and used by the QUIC listener.
+			bundle, err := transfer.NewTLSBundle()
+			if err != nil {
+				return fmt.Errorf("TLS setup: %w", err)
+			}
 			go func() {
-				if err := discovery.Advertise(ctx, port); err != nil && !errors.Is(err, context.Canceled) {
+				if err := discovery.Advertise(ctx, port, bundle.Fingerprint); err != nil && !errors.Is(err, context.Canceled) {
 					log.Printf("mDNS: %v", err)
 				}
 			}()
-			return transfer.Listen(ctx, addr)
+			return transfer.ListenWithBundle(ctx, addr, bundle)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", discovery.DefaultPort, "listen port")
@@ -180,6 +187,7 @@ func cmdSend() *cobra.Command {
 	var relayURL string
 	var code string
 	var pipe bool
+	var fingerprintHex string
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -194,6 +202,12 @@ func cmdSend() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+
+			// #160: Decode optional TLS certificate fingerprint.
+			fingerprint, err := parseFingerprint(fingerprintHex)
+			if err != nil {
+				return err
+			}
 
 			// pipe モード: 引数不要
 			if pipe {
@@ -226,12 +240,21 @@ func cmdSend() *cobra.Command {
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
-				return sendNAT(ctx, relayURL, code, target, chunks)
+				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint)
 			}
 
 			peer, err := discoverAndSelect(ctx, timeout)
 			if err != nil {
 				return err
+			}
+
+			// #160: If no --fingerprint was provided but the mDNS peer advertised
+			// one, use it automatically. This gives full pinning without manual
+			// out-of-band exchange.
+			effectiveFingerprint := fingerprint
+			if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
+				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+				effectiveFingerprint = peer.Fingerprint
 			}
 
 			info, err := os.Stat(target)
@@ -240,10 +263,10 @@ func cmdSend() *cobra.Command {
 			}
 			if info.IsDir() {
 				fmt.Printf("→ Connecting to %s (%s) [dir, chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-				return transfer.SendDir(ctx, peer.Addr(), target, chunks)
+				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-			return transfer.Send(ctx, peer.Addr(), target, chunks)
+			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout (LAN mode)")
@@ -251,7 +274,25 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay server URL for NAT traversal")
 	cmd.Flags().StringVar(&code, "code", "", "pairing code from receiver (required with --relay)")
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "read from stdin instead of a file")
+	// #160: --fingerprint pins the receiver's TLS certificate SHA-256 fingerprint.
+	cmd.Flags().StringVar(&fingerprintHex, "fingerprint", "", "SHA-256 fingerprint of receiver's TLS certificate (hex, from receiver output)")
 	return cmd
+}
+
+// parseFingerprint decodes a hex-encoded SHA-256 fingerprint string.
+// Returns nil (no error) if fpHex is empty (fingerprint not provided).
+func parseFingerprint(fpHex string) ([]byte, error) {
+	if fpHex == "" {
+		return nil, nil
+	}
+	fp, err := hex.DecodeString(fpHex)
+	if err != nil {
+		return nil, fmt.Errorf("--fingerprint: invalid hex: %w", err)
+	}
+	if len(fp) != 32 {
+		return nil, fmt.Errorf("--fingerprint: expected 32-byte SHA-256 fingerprint (64 hex chars), got %d bytes", len(fp))
+	}
+	return fp, nil
 }
 
 // discoverAndSelect は mDNS でピアを探し、複数いれば対話選択する。
@@ -298,7 +339,7 @@ func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) error {
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
@@ -340,9 +381,9 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int) er
 		return err
 	}
 	if info.IsDir() {
-		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks)
+		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
 	}
-	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks)
+	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
 }
 
 func sendPipeNAT(ctx context.Context, relayURL, code string) error {
