@@ -291,7 +291,9 @@ func TestChunkHandshake_EmptyExpectedPeer_SkipsVerification(t *testing.T) {
 	go func() {
 		// Responder with no expected peer (nil).
 		// We must use a separate goroutine and temporarily set identity to responder's key.
+		initMu.RLock()
 		savedKey := sessionIdentity
+		initMu.RUnlock()
 		initMu.Lock()
 		sessionIdentity = responderKey
 		initMu.Unlock()
