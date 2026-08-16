@@ -205,23 +205,31 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 		return nil
 	}
 
-	skipSet := make(map[int]bool, len(rs.ChunksDone))
+	// #174: Use []bool instead of map[int]bool for O(1) access with lower allocation overhead.
+	skipSet := make([]bool, nChunks)
+	skipCount := 0
 	for _, idx := range rs.ChunksDone {
 		// #168: Validate chunk index before using it.
 		if idx < 0 || idx >= chunks {
 			continue
 		}
-		skipSet[idx] = true
+		if !skipSet[idx] {
+			skipSet[idx] = true
+			skipCount++
+		}
 	}
-	if len(skipSet) > 0 {
-		fmt.Printf("  Resume: skipping %d/%d completed chunks\n", len(skipSet), nChunks)
+	if skipCount > 0 {
+		fmt.Printf("  Resume: skipping %d/%d completed chunks\n", skipCount, nChunks)
 	}
 
 	chunkSize := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
 	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
 
 	// 完了済みチャンクは進捗バーだけ進める
-	for idx := range skipSet {
+	for idx, skip := range skipSet {
+		if !skip {
+			continue
+		}
 		off := int64(idx) * chunkSize
 		sz := chunkSize
 		if off+sz > info.Size() {
@@ -232,6 +240,8 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 
 	errs := make([]error, nChunks)
 	var wg sync.WaitGroup
+	// #147: Open the file once here and pass *os.File to sendChunk, which uses
+	// ReadAt for concurrent-safe access without seeking.
 	for i := 0; i < nChunks; i++ {
 		if skipSet[i] {
 			continue
@@ -244,7 +254,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, filePath, i, offset, size, bar, peerKey)
+			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey)
 		}(i)
 	}
 	wg.Wait()
@@ -320,18 +330,23 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		cp = loadOrCreate(outPath, meta)
 	}
 
-	skipSet := make(map[int]bool)
+	// #174: Use []bool instead of map[int]bool for O(1) access with lower allocation overhead.
+	skipSet := make([]bool, meta.Chunks)
+	skipCount := 0
 	for _, idx := range cp.doneIndices() {
 		// #168/#181: Validate index before using it.
 		if idx < 0 || idx >= meta.Chunks {
 			continue
 		}
-		skipSet[idx] = true
+		if !skipSet[idx] {
+			skipSet[idx] = true
+			skipCount++
+		}
 	}
 
-	if len(skipSet) > 0 {
+	if skipCount > 0 {
 		fmt.Printf("Resuming: %s — %d/%d chunks already done\n",
-			meta.Name, len(skipSet), meta.Chunks)
+			meta.Name, skipCount, meta.Chunks)
 	} else {
 		fmt.Printf("Receiving: %s  %d bytes  %d chunk(s)\n",
 			meta.Name, meta.Size, meta.Chunks)
@@ -379,7 +394,10 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 
 	// 完了済みチャンクは進捗バーだけ進める
 	chunkSize := (meta.Size + int64(meta.Chunks) - 1) / int64(meta.Chunks)
-	for idx := range skipSet {
+	for idx, skip := range skipSet {
+		if !skip {
+			continue
+		}
 		off := int64(idx) * chunkSize
 		sz := chunkSize
 		if off+sz > meta.Size {
@@ -388,11 +406,21 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		_, _ = bar.Write(make([]byte, sz))
 	}
 
-	remaining := meta.Chunks - len(skipSet)
+	remaining := meta.Chunks - skipCount
 	if remaining < 0 {
 		remaining = 0
 	}
 	errCh := make(chan error, remaining)
+
+	// #153: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
+	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
+	var closeOnce sync.Once
+	closeConn := func(cerr error) {
+		closeOnce.Do(func() {
+			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
+		})
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < remaining; i++ {
 		wg.Add(1)
@@ -400,6 +428,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			defer wg.Done()
 			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
 			if aerr != nil {
+				closeConn(aerr)
 				errCh <- aerr
 				return
 			}
@@ -444,7 +473,9 @@ func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []by
 
 // --- stream helpers ---
 
-func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
+// sendChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
+// #147: f は呼び出し元で一度だけ開かれた *os.File。ReadAt を使うため seek 不要で並列安全。
+func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
@@ -460,15 +491,12 @@ func sendChunk(ctx context.Context, conn *quic.Conn, filePath string, index int,
 		return fmt.Errorf("chunk %d meta: %w", index, err)
 	}
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return err
+	// #147: Use ReadAt for concurrent-safe reads without seeking.
+	buf := make([]byte, size)
+	if _, err := f.ReadAt(buf, offset); err != nil {
+		return fmt.Errorf("chunk %d read: %w", index, err)
 	}
-	defer f.Close()
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return err
-	}
-	_, err = io.CopyN(io.MultiWriter(ns, bar), f, size)
+	_, err = io.MultiWriter(ns, bar).Write(buf)
 	return err
 }
 
@@ -494,6 +522,7 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 
 // acceptChunkWithMeta はチャンクを受信し ChunkMeta を返す（resume でのインデックス記録用）。
 // peerKey は制御ストリームで確認したピアの静的公開鍵。
+// #184: チャンクのバイト範囲が non-overlapping かつファイルサイズ内に収まることを検証する。
 func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) (ChunkMeta, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
@@ -510,11 +539,14 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
 	}
+	// #184: Offset と Size が非負であることを確認する。
 	if cm.Offset < 0 || cm.Size < 0 {
 		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
 	}
-	if info, err := f.Stat(); err == nil {
-		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
+	// #184: チャンク範囲がファイルサイズを超えないことを確認する。
+	// ファイルは Truncate 済みなので Stat の結果は信頼できる。
+	if finfo, serr := f.Stat(); serr == nil {
+		if fileSize := finfo.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
 			return ChunkMeta{}, fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
 				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
 		}

@@ -10,9 +10,27 @@ import (
 	"github.com/flynn/noise"
 )
 
+// noiseReadPool pools ciphertext read buffers (max Noise frame = 65535 bytes).
 var noiseReadPool = sync.Pool{
 	New: func() interface{} {
 		b := make([]byte, 65535)
+		return &b
+	},
+}
+
+// noisePlainPool pools plaintext buffers reused after Decrypt (#172).
+var noisePlainPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
+
+// noiseWritePool pools outbound frame buffers: 2-byte length prefix + payload (#149, #173).
+// Size: 2 (len prefix) + maxChunk + 16 (AEAD tag) = 65018 bytes worst case.
+var noiseWritePool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 2+maxChunk+16)
 		return &b
 	},
 }
@@ -39,18 +57,31 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 		if len(chunk) > maxChunk {
 			chunk = p[:maxChunk]
 		}
-		ct, err := s.enc.Encrypt(nil, nil, chunk)
+
+		// #149: get a pooled write buffer large enough for prefix + ciphertext.
+		// Layout: [2-byte length][ciphertext (plaintext + 16-byte AEAD tag)]
+		frameBufPtr := noiseWritePool.Get().(*[]byte)
+		frameBuf := *frameBufPtr
+
+		// Encrypt into frameBuf[2:] so we can prepend the length in-place.
+		ct, err := s.enc.Encrypt(frameBuf[2:2], nil, chunk)
 		if err != nil {
+			noiseWritePool.Put(frameBufPtr)
 			return written, err
 		}
-		var lb [2]byte
-		binary.BigEndian.PutUint16(lb[:], uint16(len(ct)))
-		if _, err := s.rw.Write(lb[:]); err != nil {
-			return written, err
+
+		ctLen := len(ct)
+		// Write length prefix directly into the first two bytes of frameBuf.
+		binary.BigEndian.PutUint16(frameBuf[:2], uint16(ctLen))
+
+		// #173: single Write call for length prefix + ciphertext together.
+		frame := frameBuf[:2+ctLen]
+		_, werr := s.rw.Write(frame)
+		noiseWritePool.Put(frameBufPtr)
+		if werr != nil {
+			return written, werr
 		}
-		if _, err := s.rw.Write(ct); err != nil {
-			return written, err
-		}
+
 		written += len(chunk)
 		p = p[len(chunk):]
 	}
@@ -68,26 +99,36 @@ func (s *NoiseStream) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	size := int(binary.BigEndian.Uint16(lb[:]))
-	bufPtr := noiseReadPool.Get().(*[]byte)
-	if size > len(*bufPtr) {
-		noiseReadPool.Put(bufPtr)
-		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*bufPtr))
+
+	// Get pooled ciphertext buffer.
+	ctBufPtr := noiseReadPool.Get().(*[]byte)
+	if size > len(*ctBufPtr) {
+		noiseReadPool.Put(ctBufPtr)
+		return 0, fmt.Errorf("noise chunk size %d exceeds buffer capacity %d", size, len(*ctBufPtr))
 	}
-	ct := (*bufPtr)[:size]
+	ct := (*ctBufPtr)[:size]
 	if _, err := io.ReadFull(s.rw, ct); err != nil {
-		noiseReadPool.Put(bufPtr)
+		noiseReadPool.Put(ctBufPtr)
 		return 0, err
 	}
-	pt, err := s.dec.Decrypt(nil, nil, ct)
+
+	// #172: get a pooled plaintext buffer and pass it as dst to Decrypt.
+	ptBufPtr := noisePlainPool.Get().(*[]byte)
+	pt, err := s.dec.Decrypt((*ptBufPtr)[:0], nil, ct)
+
+	// Ciphertext buffer no longer needed after Decrypt.
+	noiseReadPool.Put(ctBufPtr)
+
 	if err != nil {
-		noiseReadPool.Put(bufPtr)
+		noisePlainPool.Put(ptBufPtr)
 		return 0, fmt.Errorf("noise decrypt: %w", err)
 	}
-	noiseReadPool.Put(bufPtr)
+
 	n := copy(p, pt)
 	if n < len(pt) {
 		s.rbuf = append(s.rbuf[:0], pt[n:]...)
 	}
+	noisePlainPool.Put(ptBufPtr)
 	return n, nil
 }
 
@@ -150,7 +191,8 @@ func HandshakeResponderFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []
 //	→ s, se           (msg3: initiator 送信 → 両側で CipherState 取得)
 //
 // CipherState の方向: cs0 = I→R (initiator enc / responder dec)
-//                     cs1 = R→I (responder enc / initiator dec)
+//
+//	cs1 = R→I (responder enc / initiator dec)
 func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, []byte, error) {
 	send := func() (*noise.CipherState, *noise.CipherState, error) {
 		msg, cs0, cs1, err := hs.WriteMessage(nil, nil)

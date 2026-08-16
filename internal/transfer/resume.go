@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 // checkpointState はチャンク単位の受信進捗を記録するファイル形式。
@@ -17,11 +18,20 @@ type checkpointState struct {
 	ChunksDone  []bool `json:"chunks_done"` // インデックス = チャンク番号
 }
 
+// saveBatchSize is the number of completed chunks between automatic flushes.
+const saveBatchSize = 10
+
+// saveInterval is the maximum duration between automatic flushes.
+const saveInterval = 5 * time.Second
+
 // checkpoint は並行アクセスを安全に処理するチェックポイントマネージャ。
 type checkpoint struct {
-	path  string
-	state checkpointState
-	mu    sync.Mutex
+	path      string
+	state     checkpointState
+	mu        sync.Mutex
+	dirty     bool
+	lastSave  time.Time
+	doneCount int // completed chunks since last save
 }
 
 // checkpointPath は outPath に対応する状態ファイルパスを返す。
@@ -41,6 +51,7 @@ func loadOrCreate(outPath string, meta Meta) *checkpoint {
 			ChunksTotal: meta.Chunks,
 			ChunksDone:  make([]bool, meta.Chunks),
 		},
+		lastSave: time.Now(),
 	}
 
 	data, err := os.ReadFile(cp.path)
@@ -89,14 +100,42 @@ func (cp *checkpoint) doneIndices() []int {
 	return done
 }
 
-// markDone はチャンク idx を完了としてマークし状態ファイルを更新する。
+// markDone はチャンク idx を完了としてマークし、バッチ条件を満たす場合のみ
+// 状態ファイルを更新する。強制書き込みには flush() を使うこと。
 func (cp *checkpoint) markDone(idx int) error {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 	if idx < 0 || idx >= len(cp.state.ChunksDone) {
 		return fmt.Errorf("markDone: index %d out of range [0, %d)", idx, len(cp.state.ChunksDone))
 	}
-	cp.state.ChunksDone[idx] = true
+	if !cp.state.ChunksDone[idx] {
+		cp.state.ChunksDone[idx] = true
+		cp.dirty = true
+		cp.doneCount++
+	}
+	// Batch writes for large transfers (ChunksTotal >= saveBatchSize): persist
+	// every saveBatchSize chunks or when saveInterval has elapsed. For small
+	// transfers persist immediately so that crash recovery works correctly even
+	// when the total chunk count is less than saveBatchSize.
+	shouldSave := cp.dirty && (cp.state.ChunksTotal < saveBatchSize ||
+		cp.doneCount >= saveBatchSize ||
+		time.Since(cp.lastSave) >= saveInterval)
+	if shouldSave {
+		if err := cp.save(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// flush は未書き込みの状態を強制的にディスクへ書き出す。
+// 転送完了時・エラー時に必ず呼ぶこと。
+func (cp *checkpoint) flush() error {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	if !cp.dirty {
+		return nil
+	}
 	return cp.save()
 }
 
@@ -111,11 +150,18 @@ func (cp *checkpoint) save() error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, cp.path)
+	if err := os.Rename(tmp, cp.path); err != nil {
+		return err
+	}
+	cp.dirty = false
+	cp.doneCount = 0
+	cp.lastSave = time.Now()
+	return nil
 }
 
-// finish は転送完了時に状態ファイルを削除する。
+// finish は転送完了時に未書き込み状態をフラッシュし、状態ファイルを削除する。
 func (cp *checkpoint) finish() {
+	_ = cp.flush()
 	_ = os.Remove(cp.path)
 }
 
