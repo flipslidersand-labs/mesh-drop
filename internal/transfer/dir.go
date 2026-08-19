@@ -167,25 +167,25 @@ func totalDirSize(files []FileMeta) int64 {
 // SendDir はディレクトリ dirPath を相手 addr へバッチ転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte) error {
+func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, compressed bool, compLevel int) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks)
+	return doSendDir(ctx, conn, dirPath, nChunks, compressed, compLevel)
 }
 
 // SendDirNAT は NAT Traversal 済みソケット経由でディレクトリを転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte) error {
+func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, compressed bool, compLevel int) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks)
+	return doSendDir(ctx, conn, dirPath, nChunks, compressed, compLevel)
 }
 
-func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int) error {
+func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, compressed bool, compLevel int) error {
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
@@ -202,11 +202,13 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	totalSize := totalDirSize(files)
 
 	meta := Meta{
-		Name:    filepath.Base(dirPath),
-		Size:    totalSize,
-		Chunks:  len(assignments),
-		Files:   files,
-		IsBatch: true,
+		Name:       filepath.Base(dirPath),
+		Size:       totalSize,
+		Chunks:     len(assignments),
+		Files:      files,
+		IsBatch:    true,
+		Compressed: compressed,
+		CompLevel:  compLevel,
 	}
 	peerKey, err := sendMeta(ctx, conn, meta)
 	if err != nil {
@@ -222,7 +224,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 			defer wg.Done()
 			f := files[a.fileIndex]
 			absPath := filepath.Join(dirPath, f.Path)
-			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey)
+			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey, compressed, compLevel)
 		}(i, a)
 	}
 	wg.Wait()
@@ -238,7 +240,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	return nil
 }
 
-func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte) error {
+func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte, compressed bool, compLevel int) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
@@ -261,6 +263,17 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 	}
 	defer f.Close()
 	if _, err := f.Seek(a.offset, io.SeekStart); err != nil {
+		return err
+	}
+	if compressed {
+		enc, encErr := newZstdEncoder(ns, compLevel)
+		if encErr != nil {
+			return fmt.Errorf("chunk %d: %w", idx, encErr)
+		}
+		_, err = io.Copy(enc, io.TeeReader(io.LimitReader(f, a.size), bar))
+		if cerr := enc.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
 		return err
 	}
 	_, err = io.CopyN(io.MultiWriter(ns, bar), f, a.size)
@@ -335,7 +348,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- acceptDirChunk(ctx, conn, handles, bar, peerKey)
+			errCh <- acceptDirChunk(ctx, conn, handles, bar, peerKey, meta.Compressed)
 		}()
 	}
 	wg.Wait()
@@ -375,7 +388,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	return nil
 }
 
-func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer, peerKey []byte) error {
+func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer, peerKey []byte, compressed bool) error {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return fmt.Errorf("accept chunk stream: %w", err)
@@ -406,6 +419,21 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
+	if compressed {
+		dec, decErr := newZstdDecoder(ns)
+		if decErr != nil {
+			return fmt.Errorf("chunk %d: %w", cm.Index, decErr)
+		}
+		defer dec.Close()
+		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
+		if cerr != nil {
+			return cerr
+		}
+		if n != cm.Size {
+			return fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
+		}
+		return nil
+	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return err
 }

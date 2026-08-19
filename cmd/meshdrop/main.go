@@ -188,6 +188,8 @@ func cmdSend() *cobra.Command {
 	var code string
 	var pipe bool
 	var fingerprintHex string
+	var compress bool
+	var compressLevel int
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -236,11 +238,15 @@ func cmdSend() *cobra.Command {
 				return fmt.Errorf("--chunks must be >= 1")
 			}
 
+			if compress {
+				fmt.Printf("  Compression: zstd level=%d\n", compressLevel)
+			}
+
 			if relayURL != "" {
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
-				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint)
+				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint, compress, compressLevel)
 			}
 
 			peer, err := discoverAndSelect(ctx, timeout)
@@ -263,10 +269,10 @@ func cmdSend() *cobra.Command {
 			}
 			if info.IsDir() {
 				fmt.Printf("→ Connecting to %s (%s) [dir, chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
+				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, compress, compressLevel)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
+			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint, compress, compressLevel)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout (LAN mode)")
@@ -276,6 +282,8 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "read from stdin instead of a file")
 	// #160: --fingerprint pins the receiver's TLS certificate SHA-256 fingerprint.
 	cmd.Flags().StringVar(&fingerprintHex, "fingerprint", "", "SHA-256 fingerprint of receiver's TLS certificate (hex, from receiver output)")
+	cmd.Flags().BoolVar(&compress, "compress", false, "compress chunks with zstd before sending")
+	cmd.Flags().IntVar(&compressLevel, "compress-level", 0, "zstd compression level: 1=fastest, 9=best, 0=default(3)")
 	return cmd
 }
 
@@ -339,7 +347,7 @@ func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte) error {
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, compressed bool, compLevel int) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
@@ -381,9 +389,9 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 		return err
 	}
 	if info.IsDir() {
-		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
+		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, compressed, compLevel)
 	}
-	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
+	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, compressed, compLevel)
 }
 
 func sendPipeNAT(ctx context.Context, relayURL, code string) error {
