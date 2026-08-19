@@ -167,11 +167,9 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 
 // HandshakeInitiator は Noise_XX のイニシエーター側ハンドシェイクを実行する。
 //
-// #148 NOTE: This function is intended for the *control stream only*.
+// This function is intended for the *control stream only*.
 // Chunk streams must NOT call this; derive per-stream keys with DeriveChunkStreamKey
 // from the control stream's session keys instead.
-// TODO(#148): enforce at the type level — a ChunkStream constructor should accept
-// a derived key and refuse a HandshakeState.
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeInitiatorFull(rw, key)
 	return ns, err
