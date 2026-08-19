@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -188,6 +189,8 @@ func cmdSend() *cobra.Command {
 	var code string
 	var pipe bool
 	var fingerprintHex string
+	var sendAll bool
+	var sendTo string
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -203,6 +206,10 @@ func cmdSend() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			if sendAll && sendTo != "" {
+				return fmt.Errorf("--all and --to are mutually exclusive")
+			}
+
 			// #160: Decode optional TLS certificate fingerprint.
 			fingerprint, err := parseFingerprint(fingerprintHex)
 			if err != nil {
@@ -211,6 +218,9 @@ func cmdSend() *cobra.Command {
 
 			// pipe モード: 引数不要
 			if pipe {
+				if sendAll || sendTo != "" {
+					return fmt.Errorf("--all/--to cannot be used with --pipe (stdin can only be read once)")
+				}
 				if relayURL != "" {
 					if code == "" {
 						return fmt.Errorf("--code is required with --relay")
@@ -237,12 +247,31 @@ func cmdSend() *cobra.Command {
 			}
 
 			if relayURL != "" {
+				if sendAll || sendTo != "" {
+					return fmt.Errorf("--all/--to cannot be used with --relay (NAT mode supports one peer at a time)")
+				}
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
 				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint)
 			}
 
+			// マルチ受信者モード
+			if sendAll || sendTo != "" {
+				peers, err := discoverAll(ctx, timeout)
+				if err != nil {
+					return err
+				}
+				if sendTo != "" {
+					peers = filterPeers(peers, strings.Split(sendTo, ","))
+					if len(peers) == 0 {
+						return fmt.Errorf("no peers matched --to %q", sendTo)
+					}
+				}
+				return sendToAll(ctx, peers, target, chunks, fingerprint)
+			}
+
+			// シングル受信者モード（既存）
 			peer, err := discoverAndSelect(ctx, timeout)
 			if err != nil {
 				return err
@@ -276,6 +305,8 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "read from stdin instead of a file")
 	// #160: --fingerprint pins the receiver's TLS certificate SHA-256 fingerprint.
 	cmd.Flags().StringVar(&fingerprintHex, "fingerprint", "", "SHA-256 fingerprint of receiver's TLS certificate (hex, from receiver output)")
+	cmd.Flags().BoolVar(&sendAll, "all", false, "send to all discovered peers simultaneously")
+	cmd.Flags().StringVar(&sendTo, "to", "", "send to specific peers (comma-separated name prefixes, e.g. web1,web2)")
 	return cmd
 }
 
@@ -337,6 +368,107 @@ func promptPeerSelection(peers []discovery.Peer) (discovery.Peer, error) {
 // isTerminal は標準入力が TTY かどうかを返す。
 func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// discoverAll は timeout 内で全 MeshDrop ピアを発見して返す。
+func discoverAll(ctx context.Context, timeout time.Duration) ([]discovery.Peer, error) {
+	fmt.Printf("Searching for peers (%.0fs)...\n", timeout.Seconds())
+	peers, err := discovery.Browse(ctx, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("no MeshDrop peers found (is receiver running?)")
+	}
+	fmt.Printf("Found %d peer(s):\n", len(peers))
+	for _, p := range peers {
+		fmt.Printf("  • %s  (%s)\n", p.Name, p.Addr())
+	}
+	return peers, nil
+}
+
+// filterPeers は prefixes にいずれかが前方一致するピアのみ返す（大文字小文字不問）。
+// マッチしなかった prefix は警告表示する。
+func filterPeers(peers []discovery.Peer, prefixes []string) []discovery.Peer {
+	var matched []discovery.Peer
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		found := false
+		for _, p := range peers {
+			if strings.HasPrefix(strings.ToLower(p.Name), strings.ToLower(prefix)) {
+				matched = append(matched, p)
+				found = true
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "  warning: no peer matched %q\n", prefix)
+		}
+	}
+	return matched
+}
+
+// peerResult は1ピアへの送信結果を保持する。
+type peerResult struct {
+	peer discovery.Peer
+	err  error
+	dur  time.Duration
+}
+
+// sendToAll は peers に並列送信し、全完了後にサマリーを表示する。
+// 一部が失敗しても他のピアへの送信は継続する。全失敗の場合のみエラーを返す。
+func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte) error {
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	isDir := info.IsDir()
+
+	results := make([]peerResult, len(peers))
+	var wg sync.WaitGroup
+	for i, p := range peers {
+		wg.Add(1)
+		go func(i int, p discovery.Peer) {
+			defer wg.Done()
+			start := time.Now()
+			fp := fingerprint
+			if len(fp) == 0 && len(p.Fingerprint) > 0 {
+				fp = p.Fingerprint
+			}
+			var sendErr error
+			if isDir {
+				fmt.Printf("→ [%s] Connecting (%s) [dir, chunks=%d]...\n", p.Name, p.Addr(), nChunks)
+				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp)
+			} else {
+				fmt.Printf("→ [%s] Connecting (%s) [chunks=%d]...\n", p.Name, p.Addr(), nChunks)
+				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp)
+			}
+			results[i] = peerResult{peer: p, err: sendErr, dur: time.Since(start)}
+		}(i, p)
+	}
+	wg.Wait()
+
+	// サマリー表示
+	fmt.Printf("\nBroadcast summary (%d peer(s)):\n", len(peers))
+	ok, fail := 0, 0
+	for _, r := range results {
+		if r.err == nil {
+			fmt.Printf("  ✓ %s  (%.1fs)\n", r.peer.Name, r.dur.Seconds())
+			ok++
+		} else {
+			fmt.Fprintf(os.Stderr, "  ✗ %s  %v\n", r.peer.Name, r.err)
+			fail++
+		}
+	}
+	if fail == len(peers) {
+		return fmt.Errorf("all %d peer(s) failed", fail)
+	}
+	if fail > 0 {
+		return fmt.Errorf("%d of %d peer(s) failed", fail, len(peers))
+	}
+	return nil
 }
 
 func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte) error {
