@@ -14,6 +14,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/time/rate"
 )
 
 // プロトコル概要:
@@ -100,22 +101,22 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte) error {
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSend(ctx, conn, filePath, nChunks)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte) error {
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSend(ctx, conn, filePath, nChunks)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
 }
 
 // --- accept & dispatch ---
@@ -199,7 +200,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 
 // --- single file send ---
 
-func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) error {
+func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int) error {
 	defer conn.CloseWithError(0, "done")
 
 	if nChunks < 1 {
@@ -230,10 +231,12 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 	}
 
 	meta := Meta{
-		Name:   filepath.Base(filePath),
-		Size:   info.Size(),
-		Hash:   hash,
-		Chunks: chunks,
+		Name:       filepath.Base(filePath),
+		Size:       info.Size(),
+		Hash:       hash,
+		Chunks:     chunks,
+		Compressed: compressed,
+		CompLevel:  compLevel,
 	}
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
@@ -295,7 +298,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey)
+			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey, lim, compressed, compLevel)
 		}(i)
 	}
 	wg.Wait()
@@ -467,7 +470,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
+			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey, meta.Compressed)
 			if aerr != nil {
 				closeConn(aerr)
 				errCh <- aerr
@@ -516,7 +519,7 @@ func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []by
 
 // sendChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
 // #147: f は呼び出し元で一度だけ開かれた *os.File。ReadAt を使うため seek 不要で並列安全。
-func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
+func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
@@ -535,7 +538,20 @@ func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offs
 	// #217: SectionReader で offset/size をストリーミング送信。
 	// ReadAt ベースなので concurrent-safe かつ full-size バッファ確保不要。
 	sr := io.NewSectionReader(f, offset, size)
-	_, err = io.Copy(io.MultiWriter(ns, bar), sr)
+	src := NewThrottledReader(ctx, sr, lim)
+	if compressed {
+		enc, encErr := newZstdEncoder(ns, compLevel)
+		if encErr != nil {
+			return fmt.Errorf("chunk %d: %w", index, encErr)
+		}
+		// bar は非圧縮バイト数で進捗表示する。
+		_, err = io.Copy(enc, io.TeeReader(src, bar))
+		if cerr := enc.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		return err
+	}
+	_, err = io.Copy(io.MultiWriter(ns, bar), src)
 	return err
 }
 
@@ -562,7 +578,7 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 // acceptChunkWithMeta はチャンクを受信し ChunkMeta を返す（resume でのインデックス記録用）。
 // peerKey は制御ストリームで確認したピアの静的公開鍵。
 // #184: チャンクのバイト範囲が non-overlapping かつファイルサイズ内に収まることを検証する。
-func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) (ChunkMeta, error) {
+func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte, compressed bool) (ChunkMeta, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("accept chunk stream: %w", err)
@@ -592,12 +608,27 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	}
 
 	ow := &offsetWriter{f: f, off: cm.Offset}
+	if compressed {
+		dec, decErr := newZstdDecoder(ns)
+		if decErr != nil {
+			return ChunkMeta{}, fmt.Errorf("chunk %d: %w", cm.Index, decErr)
+		}
+		defer dec.Close()
+		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
+		if cerr != nil {
+			return cm, cerr
+		}
+		if n != cm.Size {
+			return cm, fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
+		}
+		return cm, nil
+	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return cm, err
 }
 
 // acceptChunk は旧互換（dir.go 等から呼ばれる）。
-func acceptChunk(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte) error {
-	_, err := acceptChunkWithMeta(ctx, conn, f, bar, peerKey)
+func acceptChunk(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte, compressed bool) error {
+	_, err := acceptChunkWithMeta(ctx, conn, f, bar, peerKey, compressed)
 	return err
 }
