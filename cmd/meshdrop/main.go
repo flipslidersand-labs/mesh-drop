@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"golang.org/x/time/rate"
 
 	"github.com/flipslidersand/mesh-drop/internal/discovery"
 	"github.com/flipslidersand/mesh-drop/internal/nat"
@@ -191,6 +192,9 @@ func cmdSend() *cobra.Command {
 	var fingerprintHex string
 	var sendAll bool
 	var sendTo string
+	var rateLimitStr string
+	var compress bool
+	var compressLevel int
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -212,6 +216,11 @@ func cmdSend() *cobra.Command {
 
 			// #160: Decode optional TLS certificate fingerprint.
 			fingerprint, err := parseFingerprint(fingerprintHex)
+			if err != nil {
+				return err
+			}
+
+			lim, err := parseRateLimit(rateLimitStr)
 			if err != nil {
 				return err
 			}
@@ -253,7 +262,14 @@ func cmdSend() *cobra.Command {
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
-				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint)
+				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint, lim, compress, compressLevel)
+			}
+
+			if lim != nil {
+				fmt.Printf("  Rate limit: %s\n", rateLimitStr)
+			}
+			if compress {
+				fmt.Printf("  Compression: zstd level=%d\n", compressLevel)
 			}
 
 			// マルチ受信者モード
@@ -268,7 +284,7 @@ func cmdSend() *cobra.Command {
 						return fmt.Errorf("no peers matched --to %q", sendTo)
 					}
 				}
-				return sendToAll(ctx, peers, target, chunks, fingerprint)
+				return sendToAll(ctx, peers, target, chunks, fingerprint, lim, compress, compressLevel)
 			}
 
 			// シングル受信者モード（既存）
@@ -292,10 +308,10 @@ func cmdSend() *cobra.Command {
 			}
 			if info.IsDir() {
 				fmt.Printf("→ Connecting to %s (%s) [dir, chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
+				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint)
+			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout (LAN mode)")
@@ -307,6 +323,9 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().StringVar(&fingerprintHex, "fingerprint", "", "SHA-256 fingerprint of receiver's TLS certificate (hex, from receiver output)")
 	cmd.Flags().BoolVar(&sendAll, "all", false, "send to all discovered peers simultaneously")
 	cmd.Flags().StringVar(&sendTo, "to", "", "send to specific peers (comma-separated name prefixes, e.g. web1,web2)")
+	cmd.Flags().StringVar(&rateLimitStr, "rate-limit", "", "maximum send throughput (e.g. 10MB/s, 512KB/s); default: unlimited")
+	cmd.Flags().BoolVar(&compress, "compress", false, "compress chunks with zstd before sending")
+	cmd.Flags().IntVar(&compressLevel, "compress-level", 0, "zstd compression level: 1=fastest, 9=best, 0=default(3)")
 	return cmd
 }
 
@@ -419,7 +438,7 @@ type peerResult struct {
 
 // sendToAll は peers に並列送信し、全完了後にサマリーを表示する。
 // 一部が失敗しても他のピアへの送信は継続する。全失敗の場合のみエラーを返す。
-func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte) error {
+func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	info, err := os.Stat(target)
 	if err != nil {
 		return err
@@ -440,10 +459,10 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 			var sendErr error
 			if isDir {
 				fmt.Printf("→ [%s] Connecting (%s) [dir, chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp)
+				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel)
 			} else {
 				fmt.Printf("→ [%s] Connecting (%s) [chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp)
+				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel)
 			}
 			results[i] = peerResult{peer: p, err: sendErr, dur: time.Since(start)}
 		}(i, p)
@@ -471,7 +490,7 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 	return nil
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte) error {
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
@@ -513,9 +532,53 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 		return err
 	}
 	if info.IsDir() {
-		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
+		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel)
 	}
-	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint)
+	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel)
+}
+
+// parseRateLimit は "10MB/s", "512KB/s", "1Gbps" 等の文字列を byte/s に変換して Limiter を返す。
+// 空文字列は nil (無制限) を返す。
+func parseRateLimit(s string) (*rate.Limiter, error) {
+	if s == "" {
+		return nil, nil
+	}
+	s = strings.TrimSpace(s)
+	// strip trailing "/s" or "ps" suffix
+	s = strings.TrimSuffix(s, "/s")
+	s = strings.TrimSuffix(s, "ps")
+	s = strings.ToUpper(s)
+
+	var multiplier int64 = 1
+	switch {
+	case strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "GIB"):
+		multiplier = 1 << 30
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "GIB"), "GB")
+	case strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "MIB"):
+		multiplier = 1 << 20
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "MIB"), "MB")
+	case strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "KIB"):
+		multiplier = 1 << 10
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "KIB"), "KB")
+	case strings.HasSuffix(s, "B"):
+		s = strings.TrimSuffix(s, "B")
+	case strings.HasSuffix(s, "G"):
+		multiplier = 1 << 30
+		s = strings.TrimSuffix(s, "G")
+	case strings.HasSuffix(s, "M"):
+		multiplier = 1 << 20
+		s = strings.TrimSuffix(s, "M")
+	case strings.HasSuffix(s, "K"):
+		multiplier = 1 << 10
+		s = strings.TrimSuffix(s, "K")
+	}
+
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || n <= 0 {
+		return nil, fmt.Errorf("--rate-limit: invalid value %q (use e.g. 10MB/s, 512KB/s)", s)
+	}
+	bytesPerSec := int64(n * float64(multiplier))
+	return transfer.NewRateLimiter(bytesPerSec), nil
 }
 
 func sendPipeNAT(ctx context.Context, relayURL, code string) error {
