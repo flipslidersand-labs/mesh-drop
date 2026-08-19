@@ -14,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 type fileHandle struct {
@@ -167,25 +168,25 @@ func totalDirSize(files []FileMeta) int64 {
 // SendDir はディレクトリ dirPath を相手 addr へバッチ転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte) error {
+func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim)
 }
 
 // SendDirNAT は NAT Traversal 済みソケット経由でディレクトリを転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte) error {
+func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim)
 }
 
-func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int) error {
+func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter) error {
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
@@ -222,7 +223,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 			defer wg.Done()
 			f := files[a.fileIndex]
 			absPath := filepath.Join(dirPath, f.Path)
-			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey)
+			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey, lim)
 		}(i, a)
 	}
 	wg.Wait()
@@ -238,7 +239,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	return nil
 }
 
-func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte) error {
+func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte, lim *rate.Limiter) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
@@ -263,7 +264,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 	if _, err := f.Seek(a.offset, io.SeekStart); err != nil {
 		return err
 	}
-	_, err = io.CopyN(io.MultiWriter(ns, bar), f, a.size)
+	_, err = io.CopyN(io.MultiWriter(ns, bar), NewThrottledReader(ctx, f, lim), a.size)
 	return err
 }
 

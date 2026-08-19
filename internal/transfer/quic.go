@@ -14,6 +14,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/time/rate"
 )
 
 // プロトコル概要:
@@ -100,22 +101,22 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte) error {
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSend(ctx, conn, filePath, nChunks)
+	return doSend(ctx, conn, filePath, nChunks, lim)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte) error {
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSend(ctx, conn, filePath, nChunks)
+	return doSend(ctx, conn, filePath, nChunks, lim)
 }
 
 // --- accept & dispatch ---
@@ -199,7 +200,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint
 
 // --- single file send ---
 
-func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) error {
+func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter) error {
 	defer conn.CloseWithError(0, "done")
 
 	if nChunks < 1 {
@@ -295,7 +296,7 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int) 
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey)
+			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey, lim)
 		}(i)
 	}
 	wg.Wait()
@@ -516,7 +517,7 @@ func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []by
 
 // sendChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
 // #147: f は呼び出し元で一度だけ開かれた *os.File。ReadAt を使うため seek 不要で並列安全。
-func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte) error {
+func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte, lim *rate.Limiter) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
@@ -535,7 +536,7 @@ func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offs
 	// #217: SectionReader で offset/size をストリーミング送信。
 	// ReadAt ベースなので concurrent-safe かつ full-size バッファ確保不要。
 	sr := io.NewSectionReader(f, offset, size)
-	_, err = io.Copy(io.MultiWriter(ns, bar), sr)
+	_, err = io.Copy(io.MultiWriter(ns, bar), NewThrottledReader(ctx, sr, lim))
 	return err
 }
 
