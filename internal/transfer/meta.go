@@ -38,11 +38,49 @@ type ChunkMeta struct {
 	FileIndex int   `json:"file_index,omitempty"`
 }
 
-// ResumeState は受信側が送信側へ返す「完了済みチャンク」情報。
-// 送信側はこれを見てスキップし、未完了チャンクのみ再送する。
+// ResumeState は受信側が送信側へ返す「完了済み」情報。
+// 送信側はこれを見てスキップし、未完了分のみ再送する。
 // 互換性: ResumeState を理解しない旧クライアントは無視してフル送信する。
 type ResumeState struct {
-	ChunksDone []int `json:"chunks_done"` // 完了済みチャンクのインデックス
+	ChunksDone []int    `json:"chunks_done"`          // 完了済みチャンクインデックス（シングルファイル）
+	DirDone    []string `json:"dir_done,omitempty"`   // 完了済みファイルパス（ディレクトリ転送）
+}
+
+// DirSendState は送信側がディレクトリ転送で DirDone を受け取った後、
+// 実際に送るチャンク数を受信側へ通知する。
+// 受信側はこの値でチャンク受信ループの反復数を確定する。
+// 互換性: 旧クライアントはこのメッセージを送らない。readDirSendState は EOF を
+// graceful に扱い、その場合は ActualChunks=0 (= 元の Meta.Chunks を使う) を返す。
+type DirSendState struct {
+	ActualChunks int `json:"actual_chunks"`
+}
+
+func writeDirSendState(w io.Writer, dss DirSendState) error {
+	b, err := json.Marshal(dss)
+	if err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, uint32(len(b))); err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
+func readDirSendState(r io.Reader) (DirSendState, error) {
+	var length uint32
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return DirSendState{}, err
+	}
+	if length > maxMetaLength {
+		return DirSendState{}, fmt.Errorf("dir send state too large: %d bytes", length)
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return DirSendState{}, err
+	}
+	var dss DirSendState
+	return dss, json.Unmarshal(buf, &dss)
 }
 
 func writeResumeState(w io.Writer, rs ResumeState) error {

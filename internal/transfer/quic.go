@@ -101,22 +101,22 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // --- accept & dispatch ---
@@ -138,7 +138,7 @@ const appErrCodeTOFU quic.ApplicationErrorCode = 2
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
 // シングルファイルモードでは制御ストリームで ResumeState を返送してから受信する。
 func dispatchConn(ctx context.Context, conn *quic.Conn) error {
-	meta, cp, peerKey, err := acceptMetaDispatch(ctx, conn)
+	meta, cp, peerKey, dirDone, err := acceptMetaDispatch(ctx, conn, ".")
 	if err != nil {
 		code := quic.ApplicationErrorCode(1)
 		if errors.Is(err, errTOFURejected) {
@@ -151,56 +151,93 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, ".", peerKey)
+		return doReceiveDir(ctx, conn, meta, ".", peerKey, dirDone)
 	default:
 		return doReceiveFileResume(ctx, conn, meta, cp, peerKey)
 	}
 }
 
 // acceptMetaDispatch は制御ストリームで Meta を受信する。
-// シングルファイルのとき、チェックポイントを確認して ResumeState を送信側へ返す。
+// シングルファイルのとき、チェックポイントを確認して ResumeState を返送する。
+// IsBatch のとき、outDir の既存ファイルを検証して DirDone を ResumeState に含め返送する。
 // 制御ストリームには永続 identity + TOFU 検証を使用する。
 // 返す []byte はピアの静的公開鍵（チャンクストリームの同一ピア検証に使う）。
-func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint, []byte, error) {
+// 返す []string は完了済みファイルパス（IsBatch のみ有効、それ以外は nil）。
+func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Meta, *checkpoint, []byte, []string, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 	defer stream.Close()
 
 	ns, peerKey, err := controlHandshakeResponder(stream)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 
 	meta, err := readMeta(ns)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 
 	if !meta.IsPipe && !meta.IsBatch && meta.Chunks < 0 {
-		return Meta{}, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
-	if meta.IsPipe || meta.IsBatch {
-		return meta, nil, peerKey, nil
+	if meta.IsPipe {
+		return meta, nil, peerKey, nil, nil
+	}
+
+	if meta.IsBatch {
+		// ディレクトリ転送: 完了済みファイルを検証して DirDone を送信側へ通知。
+		dirDone := computeDirDone(meta.Files, outDir)
+		rs := ResumeState{DirDone: dirDone}
+		_ = writeResumeState(ns, rs)
+
+		// 送信側から実際のチャンク数を受け取る（旧クライアントは送らない→EOF→0）。
+		dss, dssErr := readDirSendState(ns)
+		if dssErr == nil && dss.ActualChunks > 0 {
+			meta.Chunks = dss.ActualChunks
+		}
+		return meta, nil, peerKey, dirDone, nil
 	}
 
 	// シングルファイル: チェックポイントから ResumeState を返送
 	if meta.Name == "" || filepath.Base(meta.Name) == "." {
-		return Meta{}, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
 	outPath := filepath.Base(meta.Name)
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
 
-	return meta, cp, peerKey, nil
+	return meta, cp, peerKey, nil, nil
+}
+
+// computeDirDone は meta.Files の各ファイルについて outDir に存在しハッシュが一致するものを返す。
+func computeDirDone(files []FileMeta, outDir string) []string {
+	var done []string
+	for _, fm := range files {
+		if fm.Hash == "" {
+			continue
+		}
+		outPath := filepath.Join(outDir, fm.Path)
+		f, err := os.Open(outPath)
+		if err != nil {
+			continue
+		}
+		got, err := hashReader(f)
+		f.Close()
+		if err == nil && got == fm.Hash {
+			done = append(done, fm.Path)
+		}
+	}
+	return done
 }
 
 // --- single file send ---
 
-func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int) error {
+func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	defer conn.CloseWithError(0, "done")
 
 	if nChunks < 1 {
@@ -252,14 +289,16 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, 
 	// #174: Use []bool instead of map[int]bool for O(1) access with lower allocation overhead.
 	skipSet := make([]bool, nChunks)
 	skipCount := 0
-	for _, idx := range rs.ChunksDone {
-		// #168: Validate chunk index before using it.
-		if idx < 0 || idx >= chunks {
-			continue
-		}
-		if !skipSet[idx] {
-			skipSet[idx] = true
-			skipCount++
+	if !noResume {
+		for _, idx := range rs.ChunksDone {
+			// #168: Validate chunk index before using it.
+			if idx < 0 || idx >= chunks {
+				continue
+			}
+			if !skipSet[idx] {
+				skipSet[idx] = true
+				skipCount++
+			}
 		}
 	}
 	if skipCount > 0 {

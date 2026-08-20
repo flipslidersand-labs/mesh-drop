@@ -40,7 +40,7 @@ func TestDoReceiveDir_PathTraversal(t *testing.T) {
 
 	// doReceiveDir should reject traversal before opening any network streams;
 	// we pass a nil conn — if path validation is correct it returns before using conn.
-	err := doReceiveDir(context.Background(), nil, meta, outDir, nil)
+	err := doReceiveDir(context.Background(), nil, meta, outDir, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for path traversal, got nil")
 	}
