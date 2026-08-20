@@ -29,6 +29,22 @@
   .peer-btn.selected { border-color: #7c6cfc; background: rgba(124,108,252,0.15); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
   .empty { color: #555; font-size: 0.85rem; text-align: center; padding: 0.5rem 0; }
+  details { margin-top: 1rem; }
+  summary { cursor: pointer; font-size: 0.82rem; color: #777; user-select: none; }
+  summary:hover { color: #aaa; }
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem; }
+  .settings-grid label { font-size: 0.8rem; color: #888; display: flex; flex-direction: column; gap: 0.3rem; }
+  .settings-grid input[type=text], .settings-grid input[type=number] {
+    background: #0f0f11; border: 1px solid #2a2a35; border-radius: 6px;
+    color: #e2e2e2; padding: 0.35rem 0.5rem; font-size: 0.85rem;
+  }
+  .settings-grid input[type=checkbox] { width: 1rem; height: 1rem; accent-color: #7c6cfc; }
+  .check-row { flex-direction: row !important; align-items: center; gap: 0.5rem !important; }
+  .progress-wrap { margin-top: 0.75rem; display: none; }
+  progress { width: 100%; height: 6px; border-radius: 3px; appearance: none; }
+  progress::-webkit-progress-bar { background: #2a2a35; border-radius: 3px; }
+  progress::-webkit-progress-value { background: #7c6cfc; border-radius: 3px; transition: width 0.2s; }
+  .progress-label { font-size: 0.78rem; color: #888; margin-top: 0.3rem; text-align: right; }
   #send-btn {
     width: 100%; padding: 0.8rem; border: none; border-radius: 8px;
     background: #7c6cfc; color: #fff; font-size: 0.95rem; font-weight: 600;
@@ -43,7 +59,8 @@
   }
   .event.ok { border-color: #166534; background: #052e16; }
   .event.err { border-color: #7f1d1d; background: #2d0a0a; }
-  .event .icon { font-size: 1rem; }
+  .event.pending { border-color: #1e3a5f; background: #0a1a2d; }
+  .event .icon { font-size: 1rem; flex-shrink: 0; }
   .selected-file { margin-top: 0.75rem; font-size: 0.82rem; color: #aaa; text-align: center; }
 </style>
 </head>
@@ -68,6 +85,29 @@
 
 <div class="card">
   <button id="send-btn" disabled>Send</button>
+
+  <div class="progress-wrap" id="progress-wrap">
+    <progress id="progress-bar" value="0" max="100"></progress>
+    <div class="progress-label" id="progress-label">0%</div>
+  </div>
+
+  <details>
+    <summary>Advanced settings</summary>
+    <div class="settings-grid">
+      <label class="check-row">
+        <input type="checkbox" id="opt-compress">
+        <span>Compress (zstd)</span>
+      </label>
+      <label>
+        Level (1–9, 0=default)
+        <input type="number" id="opt-level" min="0" max="9" value="0" style="width:5rem">
+      </label>
+      <label style="grid-column:1/-1">
+        Rate limit (e.g. 10MB/s — empty = unlimited)
+        <input type="text" id="opt-rate" placeholder="unlimited">
+      </label>
+    </div>
+  </details>
 </div>
 
 <div class="card" id="log-card" style="display:none">
@@ -76,16 +116,20 @@
 </div>
 
 <script>
-const dropZone = document.getElementById('drop-zone');
+const dropZone  = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
-const peersEl  = document.getElementById('peers');
-const sendBtn  = document.getElementById('send-btn');
-const eventsEl = document.getElementById('events');
-const logCard  = document.getElementById('log-card');
-const selName  = document.getElementById('selected-name');
+const peersEl   = document.getElementById('peers');
+const sendBtn   = document.getElementById('send-btn');
+const eventsEl  = document.getElementById('events');
+const logCard   = document.getElementById('log-card');
+const selName   = document.getElementById('selected-name');
+const progWrap  = document.getElementById('progress-wrap');
+const progBar   = document.getElementById('progress-bar');
+const progLabel = document.getElementById('progress-label');
 
 let selectedFile = null;
 let selectedPeer = null;
+let activeSendId = null;
 
 dropZone.addEventListener('click', () => fileInput.click());
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
@@ -110,10 +154,9 @@ function fmtSize(b) {
 }
 
 function updateBtn() {
-  sendBtn.disabled = !(selectedFile && selectedPeer);
+  sendBtn.disabled = !(selectedFile && selectedPeer) || activeSendId != null;
 }
 
-// Peer discovery: poll every 3s
 async function loadPeers() {
   try {
     const res = await fetch('/api/peers');
@@ -144,41 +187,96 @@ async function loadPeers() {
 loadPeers();
 setInterval(loadPeers, 3000);
 
-// SSE
+// SSE — progress (#238)
 const sse = new EventSource('/sse/progress');
 sse.onmessage = e => {
   const ev = JSON.parse(e.data);
-  addEvent(ev);
+  if (ev.id !== activeSendId) return;
+  if (ev.done) {
+    progWrap.style.display = 'none';
+    activeSendId = null;
+    sendBtn.textContent = 'Send';
+    updateBtn();
+    // Replace pending entry with final result
+    const pending = eventsEl.querySelector(`[data-id="${ev.id}"]`);
+    if (pending) pending.remove();
+    addEntry(ev);
+  } else if (ev.total > 0) {
+    const pct = Math.min(99, Math.round(ev.sent / ev.total * 100));
+    progBar.value = pct;
+    progLabel.textContent = pct + '%  —  ' + fmtSize(ev.sent) + ' / ' + fmtSize(ev.total);
+  }
 };
 
-function addEvent(ev) {
+// History: load on page start (#240)
+async function loadHistory() {
+  try {
+    const res = await fetch('/api/history');
+    const entries = await res.json();
+    if (entries && entries.length) {
+      logCard.style.display = '';
+      entries.forEach(e => addEntry({ id: e.id, direction: e.direction, file: e.file, peer: e.peer, done: true, error: e.error }));
+    }
+  } catch {}
+}
+loadHistory();
+
+function addEntry(ev) {
   logCard.style.display = '';
+  const ok = !ev.error;
   const div = document.createElement('div');
-  div.className = 'event ' + (ev.error ? 'err' : 'ok');
-  div.innerHTML = `<span class="icon">${ev.error ? '✗' : '✓'}</span>
-    <span>${ev.file} → ${ev.peer}${ev.error ? ' — ' + ev.error : ''}</span>`;
+  div.className = 'event ' + (ok ? 'ok' : 'err');
+  div.setAttribute('data-id', ev.id);
+  div.innerHTML = `<span class="icon">${ok ? '⬆' : '✗'}</span>
+    <span>${ev.file} <span style="color:#555">→ ${ev.peer}</span>${ev.error ? ' — ' + ev.error : ''}</span>`;
   eventsEl.prepend(div);
 }
 
 sendBtn.addEventListener('click', async () => {
-  if (!selectedFile || !selectedPeer) return;
+  if (!selectedFile || !selectedPeer || activeSendId != null) return;
   sendBtn.disabled = true;
   sendBtn.textContent = 'Sending…';
+  progBar.value = 0;
+  progLabel.textContent = '0%';
+  progWrap.style.display = '';
 
   const form = new FormData();
   form.append('file', selectedFile);
   form.append('peer', selectedPeer);
+  form.append('compress', document.getElementById('opt-compress').checked ? 'true' : 'false');
+  form.append('compress_level', document.getElementById('opt-level').value);
+  form.append('rate_limit', document.getElementById('opt-rate').value.trim());
+
+  // Add pending entry
+  const pendingId = 'pending-' + Date.now();
+  logCard.style.display = '';
+  const pendingDiv = document.createElement('div');
+  pendingDiv.className = 'event pending';
+  pendingDiv.setAttribute('data-id', pendingId);
+  pendingDiv.innerHTML = `<span class="icon">⏳</span><span>${selectedFile.name} <span style="color:#555">→ ${selectedPeer}</span></span>`;
+  eventsEl.prepend(pendingDiv);
 
   try {
     const res = await fetch('/api/send', { method: 'POST', body: form });
     if (!res.ok) {
       const txt = await res.text();
-      addEvent({ file: selectedFile.name, peer: selectedPeer, error: txt, done: true });
+      progWrap.style.display = 'none';
+      pendingDiv.remove();
+      addEntry({ id: pendingId, direction: 'send', file: selectedFile.name, peer: selectedPeer, done: true, error: txt });
+      sendBtn.textContent = 'Send';
+      updateBtn();
+      return;
     }
-  } catch(err) {
-    addEvent({ file: selectedFile.name, peer: selectedPeer, error: err.message, done: true });
-  } finally {
+    const { id } = await res.json();
+    activeSendId = id;
+    // Retag the pending entry with the real id so SSE can find it
+    pendingDiv.setAttribute('data-id', id);
+  } catch (err) {
+    progWrap.style.display = 'none';
+    pendingDiv.remove();
+    addEntry({ id: pendingId, direction: 'send', file: selectedFile.name, peer: selectedPeer, done: true, error: err.message });
     sendBtn.textContent = 'Send';
+    activeSendId = null;
     updateBtn();
   }
 });

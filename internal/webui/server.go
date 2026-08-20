@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,15 +22,27 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
-// ProgressEvent は SSE で送る進捗イベント。
+// ProgressEvent is sent over SSE for both send and receive events.
 type ProgressEvent struct {
-	ID      string  `json:"id"`
-	File    string  `json:"file"`
-	Peer    string  `json:"peer"`
-	Sent    int64   `json:"sent"`
-	Total   int64   `json:"total"`
-	Done    bool    `json:"done"`
-	ErrMsg  string  `json:"error,omitempty"`
+	ID        string `json:"id"`
+	Direction string `json:"direction"` // "send"
+	File      string `json:"file"`
+	Peer      string `json:"peer"`
+	Sent      int64  `json:"sent,omitempty"`
+	Total     int64  `json:"total,omitempty"`
+	Done      bool   `json:"done"`
+	ErrMsg    string `json:"error,omitempty"`
+}
+
+// HistoryEntry records a completed transfer.
+type HistoryEntry struct {
+	ID        string    `json:"id"`
+	Direction string    `json:"direction"`
+	File      string    `json:"file"`
+	Peer      string    `json:"peer"`
+	Size      int64     `json:"size"`
+	ErrMsg    string    `json:"error,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 type hub struct {
@@ -65,15 +79,22 @@ func (h *hub) publish(e ProgressEvent) {
 	}
 }
 
-// Server は meshdrop UI の HTTP サーバ。
+// Server is the meshdrop Web UI HTTP server.
 type Server struct {
 	addr    string
 	timeout time.Duration
 	hub     *hub
+
+	histMu  sync.Mutex
+	history []HistoryEntry
 }
 
 func New(addr string, discoverTimeout time.Duration) *Server {
-	return &Server{addr: addr, timeout: discoverTimeout, hub: newHub()}
+	return &Server{
+		addr:    addr,
+		timeout: discoverTimeout,
+		hub:     newHub(),
+	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -83,6 +104,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/peers", s.handlePeers)
 	mux.HandleFunc("/api/send", s.handleSend)
+	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/sse/progress", s.handleSSE)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
@@ -93,7 +115,6 @@ func (s *Server) Run(ctx context.Context) error {
 	return srv.ListenAndServe()
 }
 
-// handlePeers returns discovered mDNS peers as JSON.
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.timeout)
 	defer cancel()
@@ -115,7 +136,23 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out) //nolint:errcheck
 }
 
-// handleSend receives a multipart upload and sends to the chosen peer.
+// handleHistory returns the in-memory transfer history (newest first, max 50).
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	s.histMu.Lock()
+	h := make([]HistoryEntry, len(s.history))
+	copy(h, s.history)
+	s.histMu.Unlock()
+
+	if len(h) > 50 {
+		h = h[len(h)-50:]
+	}
+	for i, j := 0, len(h)-1; i < j; i, j = i+1, j-1 {
+		h[i], h[j] = h[j], h[i]
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(h) //nolint:errcheck
+}
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -138,36 +175,93 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Write to temp file so transfer.Send can stat it.
 	tmp, err := os.CreateTemp("", "meshdrop-ui-*-"+filepath.Base(header.Filename))
 	if err != nil {
 		http.Error(w, "temp file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer os.Remove(tmp.Name())
-
 	if _, err := io.Copy(tmp, file); err != nil {
 		tmp.Close()
+		os.Remove(tmp.Name())
 		http.Error(w, "write temp: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	tmp.Close()
 
+	// Optional: rate-limit and compression settings (#239).
+	rateLimitStr := strings.TrimSpace(r.FormValue("rate_limit"))
+	compress := r.FormValue("compress") == "true"
+	compLevel, _ := strconv.Atoi(r.FormValue("compress_level"))
+
+	lim, limErr := transfer.ParseRateLimit(rateLimitStr)
+	if limErr != nil {
+		os.Remove(tmp.Name())
+		http.Error(w, limErr.Error(), http.StatusBadRequest)
+		return
+	}
+
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	total := header.Size
+
 	go func() {
-		err := transfer.Send(r.Context(), peerAddr, tmp.Name(), 4, nil, nil, false, 0)
-		ev := ProgressEvent{ID: id, File: header.Filename, Peer: peerAddr, Done: true}
-		if err != nil {
-			ev.ErrMsg = err.Error()
+		defer os.Remove(tmp.Name())
+
+		// Publish heartbeat progress events while sending (#238).
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(300 * time.Millisecond)
+			defer ticker.Stop()
+			pct := int64(0)
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					// Increment by a small amount so the bar is animated;
+					// exact bytes are not available without deeper integration.
+					if pct < total*9/10 {
+						pct += total / 20
+					}
+					s.hub.publish(ProgressEvent{
+						ID: id, Direction: "send",
+						File: header.Filename, Peer: peerAddr,
+						Sent: pct, Total: total,
+					})
+				}
+			}
+		}()
+
+		sendErr := transfer.Send(r.Context(), peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel)
+		close(done)
+
+		ev := ProgressEvent{
+			ID: id, Direction: "send",
+			File: header.Filename, Peer: peerAddr,
+			Sent: total, Total: total, Done: true,
+		}
+		if sendErr != nil {
+			ev.ErrMsg = sendErr.Error()
+			ev.Sent = 0
 		}
 		s.hub.publish(ev)
+
+		entry := HistoryEntry{
+			ID: id, Direction: "send",
+			File: header.Filename, Peer: peerAddr,
+			Size: total, At: time.Now(),
+		}
+		if sendErr != nil {
+			entry.ErrMsg = sendErr.Error()
+		}
+		s.histMu.Lock()
+		s.history = append(s.history, entry)
+		s.histMu.Unlock()
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": id}) //nolint:errcheck
 }
 
-// handleSSE streams ProgressEvents to browser via Server-Sent Events.
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
