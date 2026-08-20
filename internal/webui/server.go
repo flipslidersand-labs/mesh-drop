@@ -25,7 +25,7 @@ var staticFiles embed.FS
 // ProgressEvent is sent over SSE for both send and receive events.
 type ProgressEvent struct {
 	ID        string `json:"id"`
-	Direction string `json:"direction"` // "send"
+	Direction string `json:"direction"` // "send" | "recv"
 	File      string `json:"file"`
 	Peer      string `json:"peer"`
 	Sent      int64  `json:"sent,omitempty"`
@@ -87,17 +87,32 @@ type Server struct {
 
 	histMu  sync.Mutex
 	history []HistoryEntry
+
+	dlMu      sync.Mutex
+	downloads map[string]string // id → abs file path
+	recvDir   string
 }
 
 func New(addr string, discoverTimeout time.Duration) *Server {
 	return &Server{
-		addr:    addr,
-		timeout: discoverTimeout,
-		hub:     newHub(),
+		addr:      addr,
+		timeout:   discoverTimeout,
+		hub:       newHub(),
+		downloads: make(map[string]string),
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	// Create persistent recv dir for the session.
+	recvDir, err := os.MkdirTemp("", "meshdrop-ui-recv-*")
+	if err != nil {
+		return fmt.Errorf("recv dir: %w", err)
+	}
+	s.recvDir = recvDir
+	defer os.RemoveAll(recvDir)
+
+	go s.runReceiver(ctx, recvDir)
+
 	mux := http.NewServeMux()
 
 	sub, _ := fs.Sub(staticFiles, "static")
@@ -105,6 +120,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/peers", s.handlePeers)
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/history", s.handleHistory)
+	mux.HandleFunc("/api/downloads/", s.handleDownload)
 	mux.HandleFunc("/sse/progress", s.handleSSE)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
@@ -285,4 +301,51 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		}
 	}
+}
+
+// handleDownload serves a received file for browser download.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
+	s.dlMu.Lock()
+	path, ok := s.downloads[id]
+	s.dlMu.Unlock()
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	name := filepath.Base(path)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	http.ServeFile(w, r, path)
+}
+
+// runReceiver starts a QUIC listener that accepts incoming transfers in a loop.
+// Received files land in recvDir and become available via /api/downloads/{id}.
+func (s *Server) runReceiver(ctx context.Context, recvDir string) {
+	bundle, err := transfer.NewTLSBundle()
+	if err != nil {
+		return
+	}
+	go discovery.Advertise(ctx, discovery.DefaultPort, bundle.Fingerprint) //nolint:errcheck
+
+	addr := fmt.Sprintf("0.0.0.0:%d", discovery.DefaultPort)
+	_ = transfer.ListenContinuous(ctx, addr, bundle, recvDir, func(name, path string, size int64, peer string) {
+		id := fmt.Sprintf("recv-%d", time.Now().UnixNano())
+
+		s.dlMu.Lock()
+		s.downloads[id] = path
+		s.dlMu.Unlock()
+
+		s.hub.publish(ProgressEvent{
+			ID: id, Direction: "recv",
+			File: name, Peer: peer,
+			Sent: size, Total: size, Done: true,
+		})
+		s.histMu.Lock()
+		s.history = append(s.history, HistoryEntry{
+			ID: id, Direction: "recv",
+			File: name, Peer: peer,
+			Size: size, At: time.Now(),
+		})
+		s.histMu.Unlock()
+	})
 }

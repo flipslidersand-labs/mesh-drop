@@ -191,13 +191,17 @@ setInterval(loadPeers, 3000);
 const sse = new EventSource('/sse/progress');
 sse.onmessage = e => {
   const ev = JSON.parse(e.data);
+  // Receive events arrive regardless of activeSendId
+  if (ev.direction === 'recv' && ev.done) {
+    addEntry(ev);
+    return;
+  }
   if (ev.id !== activeSendId) return;
   if (ev.done) {
     progWrap.style.display = 'none';
     activeSendId = null;
     sendBtn.textContent = 'Send';
     updateBtn();
-    // Replace pending entry with final result
     const pending = eventsEl.querySelector(`[data-id="${ev.id}"]`);
     if (pending) pending.remove();
     addEntry(ev);
@@ -224,11 +228,15 @@ loadHistory();
 function addEntry(ev) {
   logCard.style.display = '';
   const ok = !ev.error;
+  const isRecv = ev.direction === 'recv';
+  const icon = ok ? (isRecv ? '⬇' : '⬆') : '✗';
+  const arrow = isRecv ? '←' : '→';
+  const dlLink = (ok && isRecv) ? ` <a href="/api/downloads/${ev.id}" download="${ev.file}" style="color:#7c6cfc;margin-left:0.5rem;font-size:0.8rem">Download</a>` : '';
   const div = document.createElement('div');
   div.className = 'event ' + (ok ? 'ok' : 'err');
   div.setAttribute('data-id', ev.id);
-  div.innerHTML = `<span class="icon">${ok ? '⬆' : '✗'}</span>
-    <span>${ev.file} <span style="color:#555">→ ${ev.peer}</span>${ev.error ? ' — ' + ev.error : ''}</span>`;
+  div.innerHTML = `<span class="icon">${icon}</span>
+    <span>${ev.file} <span style="color:#555">${arrow} ${ev.peer}</span>${ev.error ? ' — ' + ev.error : ''}${dlLink}</span>`;
   eventsEl.prepend(div);
 }
 
