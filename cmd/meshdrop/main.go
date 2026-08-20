@@ -537,48 +537,14 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel)
 }
 
-// parseRateLimit は "10MB/s", "512KB/s", "1Gbps" 等の文字列を byte/s に変換して Limiter を返す。
-// 空文字列は nil (無制限) を返す。
+// parseRateLimit は "10MB/s", "512KB/s" 等の文字列を Limiter に変換する。
+// 空文字列は nil (無制限) を返す。実装は transfer.ParseRateLimit に委譲。
 func parseRateLimit(s string) (*rate.Limiter, error) {
-	if s == "" {
-		return nil, nil
+	lim, err := transfer.ParseRateLimit(s)
+	if err != nil {
+		return nil, fmt.Errorf("--rate-limit: %w", err)
 	}
-	s = strings.TrimSpace(s)
-	// strip trailing "/s" or "ps" suffix
-	s = strings.TrimSuffix(s, "/s")
-	s = strings.TrimSuffix(s, "ps")
-	s = strings.ToUpper(s)
-
-	var multiplier int64 = 1
-	switch {
-	case strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "GIB"):
-		multiplier = 1 << 30
-		s = strings.TrimSuffix(strings.TrimSuffix(s, "GIB"), "GB")
-	case strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "MIB"):
-		multiplier = 1 << 20
-		s = strings.TrimSuffix(strings.TrimSuffix(s, "MIB"), "MB")
-	case strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "KIB"):
-		multiplier = 1 << 10
-		s = strings.TrimSuffix(strings.TrimSuffix(s, "KIB"), "KB")
-	case strings.HasSuffix(s, "B"):
-		s = strings.TrimSuffix(s, "B")
-	case strings.HasSuffix(s, "G"):
-		multiplier = 1 << 30
-		s = strings.TrimSuffix(s, "G")
-	case strings.HasSuffix(s, "M"):
-		multiplier = 1 << 20
-		s = strings.TrimSuffix(s, "M")
-	case strings.HasSuffix(s, "K"):
-		multiplier = 1 << 10
-		s = strings.TrimSuffix(s, "K")
-	}
-
-	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || n <= 0 {
-		return nil, fmt.Errorf("--rate-limit: invalid value %q (use e.g. 10MB/s, 512KB/s)", s)
-	}
-	bytesPerSec := int64(n * float64(multiplier))
-	return transfer.NewRateLimiter(bytesPerSec), nil
+	return lim, nil
 }
 
 func sendPipeNAT(ctx context.Context, relayURL, code string) error {
