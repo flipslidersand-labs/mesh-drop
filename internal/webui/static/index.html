@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MeshDrop</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f11; color: #e2e2e2; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+  h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
+  .sub { color: #888; font-size: 0.85rem; margin-bottom: 2rem; }
+  .card { background: #1a1a1f; border: 1px solid #2a2a35; border-radius: 12px; padding: 1.5rem; width: 100%; max-width: 520px; margin-bottom: 1.25rem; }
+  .card h2 { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 1rem; }
+  #drop-zone {
+    border: 2px dashed #3a3a50; border-radius: 8px; padding: 2.5rem 1rem;
+    text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  }
+  #drop-zone.over { border-color: #7c6cfc; background: rgba(124,108,252,0.06); }
+  #drop-zone p { color: #888; font-size: 0.9rem; }
+  #drop-zone strong { display: block; font-size: 1rem; color: #e2e2e2; margin-bottom: 0.5rem; }
+  #file-input { display: none; }
+  .peers { display: flex; flex-direction: column; gap: 0.5rem; min-height: 2rem; }
+  .peer-btn {
+    display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.9rem;
+    border: 1px solid #2a2a35; border-radius: 8px; background: #13131a; cursor: pointer;
+    color: #e2e2e2; font-size: 0.9rem; transition: border-color 0.15s, background 0.15s;
+  }
+  .peer-btn:hover { border-color: #7c6cfc; background: rgba(124,108,252,0.08); }
+  .peer-btn.selected { border-color: #7c6cfc; background: rgba(124,108,252,0.15); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+  .empty { color: #555; font-size: 0.85rem; text-align: center; padding: 0.5rem 0; }
+  #send-btn {
+    width: 100%; padding: 0.8rem; border: none; border-radius: 8px;
+    background: #7c6cfc; color: #fff; font-size: 0.95rem; font-weight: 600;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  #send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  #send-btn:not(:disabled):hover { opacity: 0.88; }
+  .events { display: flex; flex-direction: column; gap: 0.4rem; }
+  .event {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.75rem;
+    border-radius: 6px; font-size: 0.82rem; background: #13131a; border: 1px solid #2a2a35;
+  }
+  .event.ok { border-color: #166534; background: #052e16; }
+  .event.err { border-color: #7f1d1d; background: #2d0a0a; }
+  .event .icon { font-size: 1rem; }
+  .selected-file { margin-top: 0.75rem; font-size: 0.82rem; color: #aaa; text-align: center; }
+</style>
+</head>
+<body>
+<h1>MeshDrop</h1>
+<p class="sub">P2P encrypted file transfer</p>
+
+<div class="card">
+  <h2>File</h2>
+  <div id="drop-zone">
+    <strong>Drop file here</strong>
+    <p>or click to browse</p>
+  </div>
+  <input type="file" id="file-input">
+  <div class="selected-file" id="selected-name"></div>
+</div>
+
+<div class="card">
+  <h2>Peer <span id="refresh-hint" style="font-weight:400;color:#555;font-size:0.75rem">(refreshing…)</span></h2>
+  <div class="peers" id="peers"><div class="empty">Searching…</div></div>
+</div>
+
+<div class="card">
+  <button id="send-btn" disabled>Send</button>
+</div>
+
+<div class="card" id="log-card" style="display:none">
+  <h2>Activity</h2>
+  <div class="events" id="events"></div>
+</div>
+
+<script>
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const peersEl  = document.getElementById('peers');
+const sendBtn  = document.getElementById('send-btn');
+const eventsEl = document.getElementById('events');
+const logCard  = document.getElementById('log-card');
+const selName  = document.getElementById('selected-name');
+
+let selectedFile = null;
+let selectedPeer = null;
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+function setFile(f) {
+  selectedFile = f;
+  selName.textContent = `${f.name}  (${fmtSize(f.size)})`;
+  updateBtn();
+}
+
+function fmtSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1<<20) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1<<30) return (b/(1<<20)).toFixed(1) + ' MB';
+  return (b/(1<<30)).toFixed(2) + ' GB';
+}
+
+function updateBtn() {
+  sendBtn.disabled = !(selectedFile && selectedPeer);
+}
+
+// Peer discovery: poll every 3s
+async function loadPeers() {
+  try {
+    const res = await fetch('/api/peers');
+    const peers = await res.json();
+    document.getElementById('refresh-hint').textContent = '(auto-refresh 3s)';
+    if (!peers.length) {
+      peersEl.innerHTML = '<div class="empty">No peers found — is receiver running?</div>';
+      selectedPeer = null; updateBtn(); return;
+    }
+    const prev = selectedPeer;
+    peersEl.innerHTML = '';
+    peers.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className = 'peer-btn' + (prev === p.addr ? ' selected' : '');
+      btn.innerHTML = `<span class="dot"></span>${p.name}<span style="color:#555;font-size:0.75rem;margin-left:auto">${p.addr}</span>`;
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.peer-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedPeer = p.addr;
+        updateBtn();
+      });
+      peersEl.appendChild(btn);
+      if (prev === p.addr) selectedPeer = p.addr;
+    });
+    updateBtn();
+  } catch { document.getElementById('refresh-hint').textContent = '(error)'; }
+}
+loadPeers();
+setInterval(loadPeers, 3000);
+
+// SSE
+const sse = new EventSource('/sse/progress');
+sse.onmessage = e => {
+  const ev = JSON.parse(e.data);
+  addEvent(ev);
+};
+
+function addEvent(ev) {
+  logCard.style.display = '';
+  const div = document.createElement('div');
+  div.className = 'event ' + (ev.error ? 'err' : 'ok');
+  div.innerHTML = `<span class="icon">${ev.error ? '✗' : '✓'}</span>
+    <span>${ev.file} → ${ev.peer}${ev.error ? ' — ' + ev.error : ''}</span>`;
+  eventsEl.prepend(div);
+}
+
+sendBtn.addEventListener('click', async () => {
+  if (!selectedFile || !selectedPeer) return;
+  sendBtn.disabled = true;
+  sendBtn.textContent = 'Sending…';
+
+  const form = new FormData();
+  form.append('file', selectedFile);
+  form.append('peer', selectedPeer);
+
+  try {
+    const res = await fetch('/api/send', { method: 'POST', body: form });
+    if (!res.ok) {
+      const txt = await res.text();
+      addEvent({ file: selectedFile.name, peer: selectedPeer, error: txt, done: true });
+    }
+  } catch(err) {
+    addEvent({ file: selectedFile.name, peer: selectedPeer, error: err.message, done: true });
+  } finally {
+    sendBtn.textContent = 'Send';
+    updateBtn();
+  }
+});
+</script>
+</body>
+</html>
