@@ -168,25 +168,27 @@ func totalDirSize(files []FileMeta) int64 {
 // SendDir はディレクトリ dirPath を相手 addr へバッチ転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// noResume=true のとき受信側から返る DirDone を無視してフル再送する (#244)。
+func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // SendDirNAT は NAT Traversal 済みソケット経由でディレクトリを転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// noResume=true のとき受信側から返る DirDone を無視してフル再送する (#244)。
+func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume)
 }
 
-func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int) error {
+func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
@@ -211,15 +213,40 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		Compressed: compressed,
 		CompLevel:  compLevel,
 	}
-	peerKey, err := sendMeta(ctx, conn, meta)
+	// ディレクトリ転送でも ResumeState(DirDone) を受け取る (#247)
+	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
+	// #244: --no-resume フラグが立っているときは受信側の完了ファイル情報を無視する。
+	if noResume {
+		rs.DirDone = nil
+	}
+
+	// 完了済みファイルセットを構築し、対応するチャンクをスキップする (#247)
+	doneFiles := make(map[string]struct{}, len(rs.DirDone))
+	for _, p := range rs.DirDone {
+		doneFiles[p] = struct{}{}
+	}
+	if len(doneFiles) > 0 {
+		fmt.Printf("  Resume: skipping %d/%d completed file(s)\n", len(doneFiles), len(files))
+	}
 
 	bar := progressbar.DefaultBytes(totalSize, "sending  ")
+
+	// 完了済みファイルのチャンクはプログレスバーだけ進めてスキップ
+	for _, a := range assignments {
+		if _, done := doneFiles[files[a.fileIndex].Path]; done {
+			_, _ = bar.Write(make([]byte, a.size))
+		}
+	}
+
 	errs := make([]error, len(assignments))
 	var wg sync.WaitGroup
 	for i, a := range assignments {
+		if _, done := doneFiles[files[a.fileIndex].Path]; done {
+			continue // 完了済みファイルのチャンクはスキップ
+		}
 		wg.Add(1)
 		go func(idx int, a chunkAssignment) {
 			defer wg.Done()
@@ -284,14 +311,24 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
-func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte) (retErr error) {
+// dirDone は送信側がスキップした完了済みファイルの相対パス一覧 (#245)。
+func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte, dirDone []string) (retErr error) {
 	if conn != nil {
 		defer conn.CloseWithError(0, "done")
+	}
+
+	// 完了済みファイルセット (#245)
+	doneSet := make(map[string]struct{}, len(dirDone))
+	for _, p := range dirDone {
+		doneSet[p] = struct{}{}
 	}
 
 	totalSize := totalDirSize(meta.Files)
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
 		meta.Name, len(meta.Files), totalSize, meta.Chunks)
+	if len(doneSet) > 0 {
+		fmt.Printf("  Resume: %d/%d file(s) already complete, skipping\n", len(doneSet), len(meta.Files))
+	}
 
 	// outDir を絶対パスに確定してパストラバーサル検証の基準にする。
 	absBase, err := filepath.Abs(outDir)
@@ -299,17 +336,17 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		return fmt.Errorf("resolve outDir: %w", err)
 	}
 
-	// 出力ファイルを事前に確保
+	// 出力ファイルを事前に確保。完了済みファイルはスキップ。
 	handles := make([]fileHandle, len(meta.Files))
 	closed := make([]bool, len(meta.Files))
 	defer func() {
 		if retErr != nil {
-			// エラー時：未クローズのファイルを close して削除
+			// エラー時：未クローズのファイルを close して削除（完了済みは消さない）
 			for i, h := range handles {
 				if !closed[i] && h.f != nil {
 					h.f.Close()
 				}
-				if h.path != "" {
+				if _, ok := doneSet[meta.Files[i].Path]; h.path != "" && !ok {
 					os.Remove(h.path)
 				}
 			}
@@ -322,17 +359,19 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 			return fmt.Errorf("resolve path %s: %w", fm.Path, err)
 		}
 		// #163: filepath.Rel ベースのパストラバーサル検証。
-		// strings.HasPrefix は "/" と "/foo/../.." のようなケースで誤検知する可能性があるため
-		// filepath.Rel で正規化されたパスが ".." で始まらないことを確認する。
 		rel, relErr := filepath.Rel(absBase, absOut)
 		if relErr != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("path traversal detected: %s", fm.Path)
 		}
-		// #183: Use 0755 for directories and 0644 for files as default permissions.
 		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
 			return err
 		}
-		// #183: Create the file with 0644 permissions (safe default preserving umask intent).
+		if _, done := doneSet[fm.Path]; done {
+			// 完了済み: ファイルハンドルは不要。path だけ記録してハッシュ検証に使う。
+			handles[i] = fileHandle{path: absOut}
+			closed[i] = true // defer でクローズ/削除をスキップ
+			continue
+		}
 		f, err := os.OpenFile(absOut, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			return err
@@ -343,10 +382,28 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 	}
 
+	// 送信側がスキップしたチャンク数を除いた期待チャンク数を計算する。
+	// assignChunks は決定論的なので送受信側で同一の割り当てが得られる (#247)。
+	assignments := assignChunks(meta.Files, meta.Chunks)
+	expectedChunks := 0
+	for _, a := range assignments {
+		if _, done := doneSet[meta.Files[a.fileIndex].Path]; !done {
+			expectedChunks++
+		}
+	}
+
 	bar := progressbar.DefaultBytes(totalSize, "receiving")
-	errCh := make(chan error, meta.Chunks)
+
+	// 完了済みファイルのサイズ分だけプログレスバーを先行させる
+	for _, a := range assignments {
+		if _, done := doneSet[meta.Files[a.fileIndex].Path]; done {
+			_, _ = bar.Write(make([]byte, a.size))
+		}
+	}
+
+	errCh := make(chan error, expectedChunks)
 	var wg sync.WaitGroup
-	for i := 0; i < meta.Chunks; i++ {
+	for i := 0; i < expectedChunks; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -358,8 +415,10 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	fmt.Println()
 
 	for i := range handles {
-		handles[i].f.Close()
-		closed[i] = true
+		if !closed[i] {
+			handles[i].f.Close()
+			closed[i] = true
+		}
 	}
 
 	for e := range errCh {
@@ -368,8 +427,11 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 	}
 
-	// ハッシュ検証
+	// ハッシュ検証（完了済みファイルは acceptMetaDispatch で検証済みなのでスキップ）
 	for i, fm := range meta.Files {
+		if _, done := doneSet[fm.Path]; done {
+			continue
+		}
 		fh, err := os.Open(handles[i].path)
 		if err != nil {
 			return err

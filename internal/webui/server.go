@@ -247,7 +247,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		sendErr := transfer.Send(r.Context(), peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel)
+		sendErr := transfer.Send(r.Context(), peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false)
 		close(done)
 
 		ev := ProgressEvent{

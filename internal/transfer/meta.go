@@ -38,11 +38,12 @@ type ChunkMeta struct {
 	FileIndex int   `json:"file_index,omitempty"`
 }
 
-// ResumeState は受信側が送信側へ返す「完了済みチャンク」情報。
-// 送信側はこれを見てスキップし、未完了チャンクのみ再送する。
+// ResumeState は受信側が送信側へ返す「完了済み」情報。
+// 送信側はこれを見てスキップし、未完了チャンク/ファイルのみ再送する。
 // 互換性: ResumeState を理解しない旧クライアントは無視してフル送信する。
 type ResumeState struct {
-	ChunksDone []int `json:"chunks_done"` // 完了済みチャンクのインデックス
+	ChunksDone []int    `json:"chunks_done,omitempty"` // 完了済みチャンクのインデックス（シングルファイル用）
+	DirDone    []string `json:"dir_done,omitempty"`    // 完了済みファイルの相対パス（ディレクトリ転送用）
 }
 
 func writeResumeState(w io.Writer, rs ResumeState) error {

@@ -195,6 +195,7 @@ func cmdSend() *cobra.Command {
 	var rateLimitStr string
 	var compress bool
 	var compressLevel int
+	var noResume bool
 	cmd := &cobra.Command{
 		Use:   "send [file or directory]",
 		Short: "Send a file/directory/stdin (LAN mDNS, or --relay + --code for NAT traversal)",
@@ -262,7 +263,7 @@ func cmdSend() *cobra.Command {
 				if code == "" {
 					return fmt.Errorf("--code is required with --relay")
 				}
-				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint, lim, compress, compressLevel)
+				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint, lim, compress, compressLevel, noResume)
 			}
 
 			if lim != nil {
@@ -284,7 +285,7 @@ func cmdSend() *cobra.Command {
 						return fmt.Errorf("no peers matched --to %q", sendTo)
 					}
 				}
-				return sendToAll(ctx, peers, target, chunks, fingerprint, lim, compress, compressLevel)
+				return sendToAll(ctx, peers, target, chunks, fingerprint, lim, compress, compressLevel, noResume)
 			}
 
 			// シングル受信者モード（既存）
@@ -308,10 +309,10 @@ func cmdSend() *cobra.Command {
 			}
 			if info.IsDir() {
 				fmt.Printf("→ Connecting to %s (%s) [dir, chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel)
+				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel, noResume)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel)
+			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel, noResume)
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Second, "peer discovery timeout (LAN mode)")
@@ -326,6 +327,7 @@ func cmdSend() *cobra.Command {
 	cmd.Flags().StringVar(&rateLimitStr, "rate-limit", "", "maximum send throughput (e.g. 10MB/s, 512KB/s); default: unlimited")
 	cmd.Flags().BoolVar(&compress, "compress", false, "compress chunks with zstd before sending")
 	cmd.Flags().IntVar(&compressLevel, "compress-level", 0, "zstd compression level: 1=fastest, 9=best, 0=default(3)")
+	cmd.Flags().BoolVar(&noResume, "no-resume", false, "disable resume: resend all chunks even if receiver has partial progress")
 	return cmd
 }
 
@@ -438,7 +440,7 @@ type peerResult struct {
 
 // sendToAll は peers に並列送信し、全完了後にサマリーを表示する。
 // 一部が失敗しても他のピアへの送信は継続する。全失敗の場合のみエラーを返す。
-func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	info, err := os.Stat(target)
 	if err != nil {
 		return err
@@ -459,10 +461,10 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 			var sendErr error
 			if isDir {
 				fmt.Printf("→ [%s] Connecting (%s) [dir, chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel)
+				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
 			} else {
 				fmt.Printf("→ [%s] Connecting (%s) [chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel)
+				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
 			}
 			results[i] = peerResult{peer: p, err: sendErr, dur: time.Since(start)}
 		}(i, p)
@@ -490,7 +492,7 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 	return nil
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
@@ -532,9 +534,9 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 		return err
 	}
 	if info.IsDir() {
-		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel)
+		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel, noResume)
 	}
-	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel)
+	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel, noResume)
 }
 
 // parseRateLimit は "10MB/s", "512KB/s" 等の文字列を Limiter に変換する。

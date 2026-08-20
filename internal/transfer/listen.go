@@ -44,7 +44,7 @@ func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDi
 // dispatchConnToDir is like dispatchConn but routes single-file transfers to outDir
 // and invokes cb on completion.
 func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr string, cb RecvCallback) error {
-	meta, cp, peerKey, err := acceptMetaDispatch(ctx, conn)
+	meta, cp, peerKey, dirDone, err := acceptMetaDispatch(ctx, conn, outDir)
 	if err != nil {
 		conn.CloseWithError(1, err.Error()) //nolint:errcheck
 		return err
@@ -54,7 +54,7 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, outDir, peerKey)
+		return doReceiveDir(ctx, conn, meta, outDir, peerKey, dirDone)
 	default:
 		outPath := filepath.Join(outDir, filepath.Base(meta.Name))
 		if err := receiveFileToPath(ctx, conn, meta, cp, peerKey, outPath); err != nil {
