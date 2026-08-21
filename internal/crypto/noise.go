@@ -176,8 +176,6 @@ func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error)
 }
 
 // HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
-//
-// #148 NOTE: control stream only — see HandshakeInitiator for the chunk-stream policy.
 func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeResponderFull(rw, key)
 	return ns, err
