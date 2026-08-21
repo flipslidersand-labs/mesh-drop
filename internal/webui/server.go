@@ -119,6 +119,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/peers", s.handlePeers)
 	mux.HandleFunc("/api/send", s.handleSend)
+	mux.HandleFunc("/api/send-dir", s.handleSendDir)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/downloads/", s.handleDownload)
 	mux.HandleFunc("/sse/progress", s.handleSSE)
@@ -264,6 +265,156 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		entry := HistoryEntry{
 			ID: id, Direction: "send",
 			File: header.Filename, Peer: peerAddr,
+			Size: total, At: time.Now(),
+		}
+		if sendErr != nil {
+			entry.ErrMsg = sendErr.Error()
+		}
+		s.histMu.Lock()
+		s.history = append(s.history, entry)
+		s.histMu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"id": id}) //nolint:errcheck
+}
+
+func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(2 << 30); err != nil {
+		http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	peerAddr := r.FormValue("peer")
+	if peerAddr == "" {
+		http.Error(w, "peer is required", http.StatusBadRequest)
+		return
+	}
+	fileHeaders := r.MultipartForm.File["files"]
+	if len(fileHeaders) == 0 {
+		http.Error(w, "files is required", http.StatusBadRequest)
+		return
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(r.FormValue("paths")), &paths); err != nil || len(paths) != len(fileHeaders) {
+		http.Error(w, "paths must be a JSON array matching files length", http.StatusBadRequest)
+		return
+	}
+
+	rateLimitStr := strings.TrimSpace(r.FormValue("rate_limit"))
+	compress := r.FormValue("compress") == "true"
+	compLevel, _ := strconv.Atoi(r.FormValue("compress_level"))
+	lim, limErr := transfer.ParseRateLimit(rateLimitStr)
+	if limErr != nil {
+		http.Error(w, limErr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	tmpDir, err := os.MkdirTemp("", "meshdrop-ui-dir-*")
+	if err != nil {
+		http.Error(w, "temp dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	absBase, _ := filepath.Abs(tmpDir)
+
+	var totalSize int64
+	for i, fh := range fileHeaders {
+		relPath := filepath.FromSlash(filepath.Clean(filepath.ToSlash(paths[i])))
+		absOut, _ := filepath.Abs(filepath.Join(absBase, relPath))
+		rel, relErr := filepath.Rel(absBase, absOut)
+		if relErr != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "invalid path: "+paths[i], http.StatusBadRequest)
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "mkdir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		src, err := fh.Open()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "open upload: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		f, err := os.Create(absOut)
+		if err != nil {
+			src.Close()
+			os.RemoveAll(tmpDir)
+			http.Error(w, "create: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, err = io.Copy(f, src)
+		src.Close()
+		f.Close()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "write: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		totalSize += fh.Size
+	}
+
+	// webkitRelativePath is always "dirName/..." — extract the top-level dir.
+	dirName := filepath.Base(tmpDir)
+	sendPath := tmpDir
+	if len(paths) > 0 {
+		first := filepath.ToSlash(paths[0])
+		if idx := strings.IndexByte(first, '/'); idx > 0 {
+			dirName = first[:idx]
+			sendPath = filepath.Join(tmpDir, dirName)
+		}
+	}
+
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	total := totalSize
+
+	go func() {
+		defer os.RemoveAll(tmpDir)
+
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(300 * time.Millisecond)
+			defer ticker.Stop()
+			pct := int64(0)
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					if pct < total*9/10 {
+						pct += total / 20
+					}
+					s.hub.publish(ProgressEvent{
+						ID: id, Direction: "send",
+						File: dirName, Peer: peerAddr,
+						Sent: pct, Total: total,
+					})
+				}
+			}
+		}()
+
+		sendErr := transfer.SendDir(r.Context(), peerAddr, sendPath, 4, nil, lim, compress, compLevel, false)
+		close(done)
+
+		ev := ProgressEvent{
+			ID: id, Direction: "send",
+			File: dirName, Peer: peerAddr,
+			Sent: total, Total: total, Done: true,
+		}
+		if sendErr != nil {
+			ev.ErrMsg = sendErr.Error()
+			ev.Sent = 0
+		}
+		s.hub.publish(ev)
+
+		entry := HistoryEntry{
+			ID: id, Direction: "send",
+			File: dirName, Peer: peerAddr,
 			Size: total, At: time.Now(),
 		}
 		if sendErr != nil {
