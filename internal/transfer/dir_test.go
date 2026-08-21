@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,7 @@ func TestDoReceiveDir_PathTraversal(t *testing.T) {
 
 	// doReceiveDir should reject traversal before opening any network streams;
 	// we pass a nil conn — if path validation is correct it returns before using conn.
-	err := doReceiveDir(context.Background(), nil, meta, outDir, nil)
+	err := doReceiveDir(context.Background(), nil, meta, outDir, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for path traversal, got nil")
 	}
@@ -82,4 +83,53 @@ func isInsideDir(absOut, absBase string) bool {
 	return len(absOut) > len(absBase) &&
 		absOut[:len(absBase)] == absBase &&
 		absOut[len(absBase)] == os.PathSeparator
+}
+
+func TestCheckDirDone_HashMatch(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a file and compute its BLAKE3 hash.
+	content := []byte("hello world")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.Open(filepath.Join(dir, "a.txt"))
+	hash, _ := hashReader(f)
+	f.Close()
+
+	files := []FileMeta{
+		{Path: "a.txt", Size: int64(len(content)), Hash: hash},
+		{Path: "b.txt", Size: 100, Hash: "notexist"},
+	}
+
+	done := checkDirDone(dir, files)
+	if len(done) != 1 || done[0] != "a.txt" {
+		t.Fatalf("expected [a.txt], got %v", done)
+	}
+}
+
+func TestCheckDirDone_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	files := []FileMeta{{Path: "missing.txt", Size: 10, Hash: "abc"}}
+	done := checkDirDone(dir, files)
+	if len(done) != 0 {
+		t.Fatalf("expected empty, got %v", done)
+	}
+}
+
+func TestResumeState_DirDone_JSON(t *testing.T) {
+	rs := ResumeState{
+		DirDone: []string{"a/b.txt", "c.txt"},
+	}
+	var buf strings.Builder
+	if err := writeResumeState(&buf, rs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readResumeState(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DirDone) != 2 || got.DirDone[0] != "a/b.txt" {
+		t.Fatalf("unexpected DirDone: %v", got.DirDone)
+	}
 }

@@ -19,10 +19,10 @@ import (
 
 // プロトコル概要:
 //   Stream 0 (control, 送信側→受信側): Noise → Meta
-//   Stream 0 (control, 受信側→送信側): Noise → ResumeState  (シングルファイルのみ)
+//   Stream 0 (control, 受信側→送信側): Noise → ResumeState  (シングルファイル: ChunksDone / ディレクトリ: DirDone)
 //   Stream 1..N (data):               Noise → ChunkMeta → bytes
 //
-// Meta.IsBatch=true  → doReceiveDir へ dispatch
+// Meta.IsBatch=true  → doReceiveDir へ dispatch (DirDone で完了ファイルをスキップ)
 // Meta.IsPipe=true   → doReceivePipeConn へ dispatch
 // それ以外           → doReceiveFileResume（resume 対応シングルファイル）
 
@@ -101,22 +101,24 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
-func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
+func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
-func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
+func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel)
+	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // --- accept & dispatch ---
@@ -136,9 +138,9 @@ func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
 const appErrCodeTOFU quic.ApplicationErrorCode = 2
 
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
-// シングルファイルモードでは制御ストリームで ResumeState を返送してから受信する。
+// シングルファイル/ディレクトリモードで制御ストリームで ResumeState を返送してから受信する。
 func dispatchConn(ctx context.Context, conn *quic.Conn) error {
-	meta, cp, peerKey, err := acceptMetaDispatch(ctx, conn)
+	meta, cp, peerKey, dirDone, err := acceptMetaDispatch(ctx, conn, ".")
 	if err != nil {
 		code := quic.ApplicationErrorCode(1)
 		if errors.Is(err, errTOFURejected) {
@@ -151,56 +153,111 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, ".", peerKey)
+		return doReceiveDir(ctx, conn, meta, ".", peerKey, dirDone)
 	default:
 		return doReceiveFileResume(ctx, conn, meta, cp, peerKey)
 	}
 }
 
 // acceptMetaDispatch は制御ストリームで Meta を受信する。
-// シングルファイルのとき、チェックポイントを確認して ResumeState を送信側へ返す。
+// シングルファイルのとき、チェックポイントを確認して ChunksDone を ResumeState で返す。
+// ディレクトリのとき、既存ファイルをハッシュ検証して DirDone を ResumeState で返す。
 // 制御ストリームには永続 identity + TOFU 検証を使用する。
 // 返す []byte はピアの静的公開鍵（チャンクストリームの同一ピア検証に使う）。
-func acceptMetaDispatch(ctx context.Context, conn *quic.Conn) (Meta, *checkpoint, []byte, error) {
+// 返す []string は完了済みファイルの相対パス（ディレクトリ転送のみ。それ以外は nil）。
+func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Meta, *checkpoint, []byte, []string, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 	defer stream.Close()
 
 	ns, peerKey, err := controlHandshakeResponder(stream)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 
 	meta, err := readMeta(ns)
 	if err != nil {
-		return Meta{}, nil, nil, err
+		return Meta{}, nil, nil, nil, err
 	}
 
 	if !meta.IsPipe && !meta.IsBatch && meta.Chunks < 0 {
-		return Meta{}, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
-	if meta.IsPipe || meta.IsBatch {
-		return meta, nil, peerKey, nil
+	if meta.IsPipe {
+		return meta, nil, peerKey, nil, nil
+	}
+
+	if meta.IsBatch {
+		// ディレクトリ: 既存ファイルをハッシュ検証して完了済みリストを送信側へ返す (#245)
+		dirDone := checkDirDone(outDir, meta.Files)
+		rs := ResumeState{DirDone: dirDone}
+		_ = writeResumeState(ns, rs)
+		return meta, nil, peerKey, dirDone, nil
 	}
 
 	// シングルファイル: チェックポイントから ResumeState を返送
 	if meta.Name == "" || filepath.Base(meta.Name) == "." {
-		return Meta{}, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
 	outPath := filepath.Base(meta.Name)
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
 
-	return meta, cp, peerKey, nil
+	return meta, cp, peerKey, nil, nil
+}
+
+// checkDirDone は outDir 内の既存ファイルを FileMeta リストと照合し、
+// ハッシュが一致する（転送完了済みの）ファイルの相対パス一覧を返す。
+func checkDirDone(outDir string, files []FileMeta) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	type result struct {
+		path string
+		done bool
+	}
+	results := make([]result, len(files))
+	var wg sync.WaitGroup
+	for i, fm := range files {
+		if fm.Hash == "" {
+			continue // ハッシュ不明はスキップ判定不可
+		}
+		wg.Add(1)
+		go func(i int, fm FileMeta) {
+			defer wg.Done()
+			absPath := filepath.Join(outDir, fm.Path)
+			f, err := os.Open(absPath)
+			if err != nil {
+				return // ファイルが存在しない → 未完了
+			}
+			got, err := hashReader(f)
+			f.Close()
+			if err != nil {
+				return
+			}
+			if got == fm.Hash {
+				results[i] = result{path: fm.Path, done: true}
+			}
+		}(i, fm)
+	}
+	wg.Wait()
+
+	var done []string
+	for _, r := range results {
+		if r.done {
+			done = append(done, r.path)
+		}
+	}
+	return done
 }
 
 // --- single file send ---
 
-func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int) error {
+func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	defer conn.CloseWithError(0, "done")
 
 	if nChunks < 1 {
@@ -241,6 +298,10 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, 
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
+	}
+	// #244: --no-resume フラグが立っているときは受信側の完了チャンク情報を無視する。
+	if noResume {
+		rs.ChunksDone = nil
 	}
 
 	// #169: Nothing to transfer for zero-byte files.
