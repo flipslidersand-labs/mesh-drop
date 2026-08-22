@@ -84,6 +84,7 @@ type Server struct {
 	addr    string
 	timeout time.Duration
 	hub     *hub
+	runCtx  context.Context
 
 	histMu  sync.Mutex
 	history []HistoryEntry
@@ -98,11 +99,13 @@ func New(addr string, discoverTimeout time.Duration) *Server {
 		addr:      addr,
 		timeout:   discoverTimeout,
 		hub:       newHub(),
+		runCtx:    context.Background(),
 		downloads: make(map[string]string),
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	s.runCtx = ctx
 	// Create persistent recv dir for the session.
 	recvDir, err := os.MkdirTemp("", "meshdrop-ui-recv-*")
 	if err != nil {
@@ -284,8 +287,17 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := r.ParseMultipartForm(2 << 30); err != nil {
-		http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
+	const (
+		maxDirUploadSize = int64(2 << 30)
+		multipartMemory  = 32 << 20
+	)
+	r.Body = http.MaxBytesReader(w, r.Body, maxDirUploadSize)
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "request body too large") {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "parse form: "+err.Error(), status)
 		return
 	}
 	peerAddr := r.FormValue("peer")
@@ -321,8 +333,29 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	absBase, _ := filepath.Abs(tmpDir)
 
 	var totalSize int64
+	var topDir string
 	for i, fh := range fileHeaders {
-		relPath := filepath.FromSlash(filepath.Clean(filepath.ToSlash(paths[i])))
+		cleanPath := filepath.Clean(filepath.ToSlash(paths[i]))
+		if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || filepath.IsAbs(cleanPath) {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "invalid path: "+paths[i], http.StatusBadRequest)
+			return
+		}
+		slash := strings.IndexByte(cleanPath, '/')
+		if slash <= 0 || i == 0 && slash == len(cleanPath)-1 {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "invalid directory path: "+paths[i], http.StatusBadRequest)
+			return
+		}
+		currentTop := cleanPath[:slash]
+		if topDir == "" {
+			topDir = currentTop
+		} else if topDir != currentTop {
+			os.RemoveAll(tmpDir)
+			http.Error(w, "all files must be from one top-level directory", http.StatusBadRequest)
+			return
+		}
+		relPath := filepath.FromSlash(cleanPath)
 		absOut, _ := filepath.Abs(filepath.Join(absBase, relPath))
 		rel, relErr := filepath.Rel(absBase, absOut)
 		if relErr != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
@@ -360,15 +393,8 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// webkitRelativePath is always "dirName/..." — extract the top-level dir.
-	dirName := filepath.Base(tmpDir)
-	sendPath := tmpDir
-	if len(paths) > 0 {
-		first := filepath.ToSlash(paths[0])
-		if idx := strings.IndexByte(first, '/'); idx > 0 {
-			dirName = first[:idx]
-			sendPath = filepath.Join(tmpDir, dirName)
-		}
-	}
+	dirName := topDir
+	sendPath := filepath.Join(tmpDir, dirName)
 
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
 	total := totalSize
@@ -398,7 +424,7 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		sendErr := transfer.SendDir(r.Context(), peerAddr, sendPath, 4, nil, lim, compress, compLevel, false)
+		sendErr := transfer.SendDir(s.runCtx, peerAddr, sendPath, 4, nil, lim, compress, compLevel, false)
 		close(done)
 
 		ev := ProgressEvent{

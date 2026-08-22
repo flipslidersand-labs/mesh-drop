@@ -1,8 +1,10 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,6 +98,33 @@ func TestHandleSend_MissingPeer(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_RejectsMultipleTopLevelDirectories(t *testing.T) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("peer", "127.0.0.1:1")
+	_ = w.WriteField("paths", `["a/one.txt","b/two.txt"]`)
+	for _, name := range []string{"one.txt", "two.txt"} {
+		part, err := w.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = part.Write([]byte("x"))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New("127.0.0.1:0", time.Second)
+	req := httptest.NewRequest(http.MethodPost, "/api/send-dir", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

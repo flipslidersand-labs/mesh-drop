@@ -201,6 +201,18 @@ function setFile(f) {
 }
 
 function setDirFiles(files, paths) {
+  const roots = new Set(paths.map(p => {
+    const clean = p.replace(/^\/+|\/+$/g, '');
+    const slash = clean.indexOf('/');
+    return slash > 0 ? clean.slice(0, slash) : '';
+  }));
+  if (roots.size !== 1 || roots.has('')) {
+    alert('Please select or drop one directory at a time.');
+    selectedFiles = []; selectedPaths = [];
+    selName.textContent = '';
+    updateBtn();
+    return;
+  }
   selectedFiles = files;
   selectedPaths = paths;
   const total = files.reduce((s, f) => s + f.size, 0);
