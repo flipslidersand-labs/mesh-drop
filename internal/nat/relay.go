@@ -414,13 +414,26 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 // CreateSession は relayURL に新しいセッションを作成してペアリングコードを返す。
 // #151: Use an explicit HTTP client with a timeout instead of http.DefaultClient.
+// CreateSession creates a new relay session and returns the pairing code.
+// Retries up to 3× with exponential backoff on transient (non-4xx) errors.
 func CreateSession(relayURL string) (string, error) {
+	return retryWithBackoff("Relay CreateSession", 3, 500*time.Millisecond, func() (string, error) {
+		return createSession(relayURL)
+	})
+}
+
+func createSession(relayURL string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Post(relayURL+"/session", "text/plain", nil)
 	if err != nil {
 		return "", fmt.Errorf("relay create: %w", err)
 	}
 	defer resp.Body.Close()
+	// 4xx errors are permanent (bad request, rate limit) — do not retry.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", permanent(fmt.Errorf("relay create: %s", strings.TrimSpace(string(b))))
+	}
 	var r map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", fmt.Errorf("relay decode: %w", err)
