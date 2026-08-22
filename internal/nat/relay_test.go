@@ -2,6 +2,7 @@ package nat
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -281,5 +282,91 @@ func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
 		t.Errorf("clientB should not be rate-limited, got %d", resp.StatusCode)
+	}
+}
+
+func TestRelayMetrics_Returns200WithContentType(t *testing.T) {
+	ts := httptest.NewServer(NewRelayServer().Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("expected text/plain content-type, got %q", ct)
+	}
+	if !strings.Contains(ct, "0.0.4") {
+		t.Fatalf("expected Prometheus version 0.0.4 in content-type, got %q", ct)
+	}
+}
+
+func TestRelayMetrics_ContainsAllMetricNames(t *testing.T) {
+	ts := httptest.NewServer(NewRelayServer().Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	expected := []string{
+		"relay_sessions_active",
+		"relay_sessions_total",
+		"relay_create_rate_limited_total",
+		"relay_join_rate_limited_total",
+		"relay_session_duration_seconds_sum",
+		"relay_session_duration_seconds_count",
+	}
+	for _, name := range expected {
+		if !strings.Contains(text, name) {
+			t.Errorf("metric %q not found in /metrics output", name)
+		}
+	}
+}
+
+func TestRelayMetrics_CountersIncrement(t *testing.T) {
+	srv := NewRelayServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// セッション作成
+	code, err := CreateSession(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ランデブー完了
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Rendezvous(ts.URL, code, "1.2.3.4:1111") //nolint:errcheck
+	}()
+	Rendezvous(ts.URL, code, "5.6.7.8:2222") //nolint:errcheck
+	<-done
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	if !strings.Contains(text, "relay_sessions_total 1") {
+		t.Errorf("expected relay_sessions_total 1 in:\n%s", text)
+	}
+	if !strings.Contains(text, "relay_session_duration_seconds_count 1") {
+		t.Errorf("expected relay_session_duration_seconds_count 1 in:\n%s", text)
 	}
 }

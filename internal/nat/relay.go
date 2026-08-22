@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,13 @@ type RelayServer struct {
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
 	trustedCIDRs   []*net.IPNet         // #214: 起動時に一度 parse した CIDR リスト
 	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
+
+	// #328: Prometheus メトリクス用アトミックカウンター
+	mSessionsTotal        atomic.Int64 // relay_sessions_total (counter)
+	mCreateRateLimited    atomic.Int64 // relay_create_rate_limited_total (counter)
+	mJoinRateLimited      atomic.Int64 // relay_join_rate_limited_total (counter)
+	mDurationSumNs        atomic.Int64 // relay_session_duration_seconds の合計 (ナノ秒)
+	mDurationCount        atomic.Int64 // relay_session_duration_seconds のサンプル数
 }
 
 // ipBucket は IP ごとのスライディングウィンドウカウンタ。
@@ -57,12 +65,13 @@ const rateBucketGrace = rateWindow
 const joinWaitTimeout = 30 * time.Second
 
 type rdv struct {
-	mu       sync.Mutex   // addrA / paired の読み書きを保護する
-	addrA    string       // 最初に登録したピア (受信側)
-	paired   bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
-	chB      chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
-	done     chan struct{} // ランデブー完了またはタイムアウトで close される
-	doneOnce sync.Once    // #215: done の二重 close を防ぐ
+	mu        sync.Mutex   // addrA / paired の読み書きを保護する
+	addrA     string       // 最初に登録したピア (受信側)
+	paired    bool         // 2番目のピアが確定したら true — 3番目以降の侵入を防ぐ
+	chB       chan string  // 2番目のピア (送信側) が登録すると addrA の待機を解除
+	done      chan struct{} // ランデブー完了またはタイムアウトで close される
+	doneOnce  sync.Once    // #215: done の二重 close を防ぐ
+	createdAt time.Time    // #328: セッション作成時刻 (duration 計測用)
 }
 
 // closeDone は sess.done を一度だけ close する。
@@ -232,7 +241,49 @@ func (s *RelayServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/session", s.handleCreate)
 	mux.HandleFunc("/session/", s.handleJoin)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	return mux
+}
+
+// handleMetrics は Prometheus テキストフォーマット (version 0.0.4) でメトリクスを返す。
+// 外部ライブラリ不要のゼロ依存実装。
+func (s *RelayServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	activeSessions := len(s.sessions)
+	s.mu.RUnlock()
+
+	total := s.mSessionsTotal.Load()
+	createRL := s.mCreateRateLimited.Load()
+	joinRL := s.mJoinRateLimited.Load()
+	durSum := s.mDurationSumNs.Load()
+	durCount := s.mDurationCount.Load()
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	fmt.Fprintf(w, "# HELP relay_sessions_active Current number of active relay sessions.\n")
+	fmt.Fprintf(w, "# TYPE relay_sessions_active gauge\n")
+	fmt.Fprintf(w, "relay_sessions_active %d\n", activeSessions)
+
+	fmt.Fprintf(w, "# HELP relay_sessions_total Total relay sessions created since startup.\n")
+	fmt.Fprintf(w, "# TYPE relay_sessions_total counter\n")
+	fmt.Fprintf(w, "relay_sessions_total %d\n", total)
+
+	fmt.Fprintf(w, "# HELP relay_create_rate_limited_total Total session create requests rejected by rate limiter.\n")
+	fmt.Fprintf(w, "# TYPE relay_create_rate_limited_total counter\n")
+	fmt.Fprintf(w, "relay_create_rate_limited_total %d\n", createRL)
+
+	fmt.Fprintf(w, "# HELP relay_join_rate_limited_total Total session join requests rejected by rate limiter.\n")
+	fmt.Fprintf(w, "# TYPE relay_join_rate_limited_total counter\n")
+	fmt.Fprintf(w, "relay_join_rate_limited_total %d\n", joinRL)
+
+	fmt.Fprintf(w, "# HELP relay_session_duration_seconds Time from session create to rendezvous complete.\n")
+	fmt.Fprintf(w, "# TYPE relay_session_duration_seconds histogram\n")
+	fmt.Fprintf(w, "relay_session_duration_seconds_sum %g\n", float64(durSum)/1e9)
+	fmt.Fprintf(w, "relay_session_duration_seconds_count %d\n", durCount)
 }
 
 // Start は addr でリレーサーバーを起動する (ブロッキング)。
@@ -273,11 +324,12 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 	allowed := s.allowCreate(clientIP)
 	s.mu.Unlock()
 	if !allowed {
+		s.mCreateRateLimited.Add(1)
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 
-	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{})}
+	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{}), createdAt: time.Now()}
 
 	// コード生成・上限チェック・挿入をロック内で行い、重複コードの上書きを防ぐ。
 	s.mu.Lock()
@@ -297,6 +349,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions[code] = sess
 	s.mu.Unlock()
+	s.mSessionsTotal.Add(1)
 
 	// handleJoin が一度も呼ばれない場合の TTL クリーンアップ。
 	// #186: TTL クリーンアップ時に sess.done を close してリソースを確実に解放する。
@@ -330,6 +383,7 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 	allowed := s.allowJoin(clientIP)
 	s.mu.Unlock()
 	if !allowed {
+		s.mJoinRateLimited.Add(1)
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -406,6 +460,12 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 		// 2番目の登録 (送信側): 受信側を即時解除してピアアドレスを交換
 		peerAddr = peerAddrA
 		sess.chB <- myAddr
+		// #328: ランデブー完了時に duration を記録
+		if !sess.createdAt.IsZero() {
+			ns := time.Since(sess.createdAt).Nanoseconds()
+			s.mDurationSumNs.Add(ns)
+			s.mDurationCount.Add(1)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
