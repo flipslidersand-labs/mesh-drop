@@ -25,14 +25,17 @@ import (
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
 )
 
+var version string
+
 // allowNoTOFU はグローバルフラグ --allow-no-tofu で設定される。
 // 非対話的環境（CI/スクリプト）で TOFU なし動作を明示的に許可する。
 var allowNoTOFU bool
 
 func main() {
 	root := &cobra.Command{
-		Use:   "meshdrop",
-		Short: "P2P encrypted file transfer",
+		Use:     "meshdrop",
+		Short:   "P2P encrypted file transfer",
+		Version: version,
 	}
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
