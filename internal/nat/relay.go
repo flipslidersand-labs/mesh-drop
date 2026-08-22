@@ -24,6 +24,7 @@ type RelayServer struct {
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
 	trustedCIDRs   []*net.IPNet         // #214: 起動時に一度 parse した CIDR リスト
 	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
+	maxSessions    int                  // #327: 上限セッション数（デフォルト: defaultMaxSessions）
 }
 
 // ipBucket は IP ごとのスライディングウィンドウカウンタ。
@@ -32,8 +33,12 @@ type ipBucket struct {
 	since time.Time
 }
 
-// maxSessions はメモリ枯渇防止のためのセッション数上限。
-const maxSessions = 10_000
+// DefaultMaxSessions はメモリ枯渇防止のためのデフォルトセッション数上限。
+// --max-sessions フラグ or MESHDROP_RELAY_MAX_SESSIONS 環境変数で上書き可能。
+const DefaultMaxSessions = 10_000
+
+// defaultMaxSessions は package-internal で DefaultMaxSessions を参照する。
+const defaultMaxSessions = DefaultMaxSessions
 
 // sessionTTL は handleJoin が一度も呼ばれなかったセッションの有効期限。
 // handleJoin 内の long-poll タイムアウト (30s) より余裕を持たせる。
@@ -82,6 +87,15 @@ func NewRelayServer() *RelayServer {
 // X-Forwarded-For / X-Real-IP をクライアント IP として採用する。
 // #162: CIDR 表記をサポートする。
 func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
+	return NewRelayServerFull(trustedProxies, defaultMaxSessions)
+}
+
+// NewRelayServerFull は信頼プロキシとセッション数上限を指定してリレーサーバーを生成する。
+// maxSess が 0 以下の場合は defaultMaxSessions を使用する。
+func NewRelayServerFull(trustedProxies []string, maxSess int) *RelayServer {
+	if maxSess <= 0 {
+		maxSess = defaultMaxSessions
+	}
 	// #214: CIDR を起動時に一度だけ parse してリクエストごとのアロケーションを排除する。
 	var cidrs []*net.IPNet
 	for _, entry := range trustedProxies {
@@ -96,6 +110,7 @@ func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
 		trustedProxies: trustedProxies,
 		trustedCIDRs:   cidrs,
 		stopEvict:      make(chan struct{}),
+		maxSessions:    maxSess,
 	}
 	// #176/#180: 定期的に期限切れレートバケットを退避してマップ肥大化を防ぐ。
 	go s.evictExpiredBuckets()
@@ -281,7 +296,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// コード生成・上限チェック・挿入をロック内で行い、重複コードの上書きを防ぐ。
 	s.mu.Lock()
-	if len(s.sessions) >= maxSessions {
+	if len(s.sessions) >= s.maxSessions {
 		s.mu.Unlock()
 		http.Error(w, "too many sessions", http.StatusServiceUnavailable)
 		return

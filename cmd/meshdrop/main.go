@@ -613,20 +613,32 @@ func cmdRelay() *cobra.Command {
 	var addr string
 	var trustedProxies []string
 	var certFile, keyFile string
+	var maxSessions int
 	cmd := &cobra.Command{
 		Use:   "relay",
 		Short: "Run a signaling relay server for NAT traversal",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// --max-sessions が未設定の場合は MESHDROP_RELAY_MAX_SESSIONS 環境変数を参照する。
+			if !cmd.Flags().Changed("max-sessions") {
+				if v := os.Getenv("MESHDROP_RELAY_MAX_SESSIONS"); v != "" {
+					n, err := strconv.Atoi(v)
+					if err != nil || n <= 0 {
+						return fmt.Errorf("MESHDROP_RELAY_MAX_SESSIONS: invalid value %q (must be positive integer)", v)
+					}
+					maxSessions = n
+				}
+			}
 			proto := "HTTP"
 			if certFile != "" && keyFile != "" {
 				proto = "HTTPS"
 			}
 			if len(trustedProxies) > 0 {
-				fmt.Printf("Relay server on %s (protocol: %s, trusted proxies: %s)\n", addr, proto, strings.Join(trustedProxies, ", "))
+				fmt.Printf("Relay server on %s (protocol: %s, trusted proxies: %s, max-sessions: %d)\n",
+					addr, proto, strings.Join(trustedProxies, ", "), maxSessions)
 			} else {
-				fmt.Printf("Relay server on %s (protocol: %s)\n", addr, proto)
+				fmt.Printf("Relay server on %s (protocol: %s, max-sessions: %d)\n", addr, proto, maxSessions)
 			}
-			return nat.NewRelayServerWithProxies(trustedProxies).StartTLS(addr, certFile, keyFile)
+			return nat.NewRelayServerFull(trustedProxies, maxSessions).StartTLS(addr, certFile, keyFile)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address")
@@ -634,5 +646,7 @@ func cmdRelay() *cobra.Command {
 		"IP addresses of trusted reverse proxies (enables X-Forwarded-For / X-Real-IP support)")
 	cmd.Flags().StringVar(&certFile, "cert", "", "path to TLS certificate file (enables HTTPS)")
 	cmd.Flags().StringVar(&keyFile, "key", "", "path to TLS private key file (enables HTTPS)")
+	cmd.Flags().IntVar(&maxSessions, "max-sessions", nat.DefaultMaxSessions,
+		"maximum concurrent relay sessions (env: MESHDROP_RELAY_MAX_SESSIONS)")
 	return cmd
 }

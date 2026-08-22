@@ -506,7 +506,7 @@ func TestHandleCreate_MaxSessionsRejection(t *testing.T) {
 
 	// Fill the map directly to avoid hitting the per-IP create rate limit.
 	srv.mu.Lock()
-	for i := 0; i < maxSessions; i++ {
+	for i := 0; i < defaultMaxSessions; i++ {
 		key := fmt.Sprintf("FILL%08d", i)
 		srv.sessions[key] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	}

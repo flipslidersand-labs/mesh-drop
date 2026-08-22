@@ -102,15 +102,15 @@ func TestRelaySessionCleanupOnTimeout(t *testing.T) {
 	defer ts.Close()
 
 	// handleCreate を直接呼び、TTL ゴルーチンが短時間で走ることを確認できないため、
-	// maxSessions 制限のテストで代替する。セッションマップを直接埋めて
+	// defaultMaxSessions 制限のテストで代替する。セッションマップを直接埋めて
 	// per-IP 作成レート制限を回避する。
 	srv.mu.Lock()
-	for i := 0; i < maxSessions; i++ {
+	for i := 0; i < defaultMaxSessions; i++ {
 		key := fmt.Sprintf("FILL%08d", i)
 		srv.sessions[key] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	}
 	srv.mu.Unlock()
-	// maxSessions 到達 → 次の POST は 503
+	// defaultMaxSessions 到達 → 次の POST は 503
 	resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -281,5 +281,40 @@ func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
 		t.Errorf("clientB should not be rate-limited, got %d", resp.StatusCode)
+	}
+}
+
+func TestRelayMaxSessions_CustomLimit(t *testing.T) {
+	srv := NewRelayServerFull(nil, 2)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// セッション 1 と 2 は成功する
+	for i := 0; i < 2; i++ {
+		resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("session %d: expected 200, got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	// 3 件目は 503
+	resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("3rd session: expected 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestRelayMaxSessions_DefaultIsPreserved(t *testing.T) {
+	srv := NewRelayServerFull(nil, 0) // 0 → defaultMaxSessions
+	if srv.maxSessions != DefaultMaxSessions {
+		t.Fatalf("expected %d, got %d", DefaultMaxSessions, srv.maxSessions)
 	}
 }
