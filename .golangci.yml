@@ -1,0 +1,22 @@
+version: "2"
+
+# Note: Go version mismatch in CI environment is a known issue.
+# The linters will be run with version compatibility in CI.
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosimple
+
+linters-settings:
+  errcheck:
+    # json.Encoder.Encode の戻り値は慣習的に無視することが多いため除外
+    exclude-functions:
+      - (encoding/json.Encoder).Encode
+
+issues:
+  # 既存の //nolint コメントを尊重する
+  exclude-use-default-heuristics: false
