@@ -203,6 +203,9 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
 	outPath := filepath.Base(meta.Name)
+	if err := sanitizeName(outPath); err != nil {
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
+	}
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
@@ -431,6 +434,9 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 
 	outPath := filepath.Base(meta.Name)
+	if err := sanitizeName(outPath); err != nil {
+		return fmt.Errorf("invalid file name in metadata: %w", err)
+	}
 	if cp == nil {
 		cp = loadOrCreate(outPath, meta)
 	}
