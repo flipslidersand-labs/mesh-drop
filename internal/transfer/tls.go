@@ -25,7 +25,7 @@ func serverTLS() (*tls.Config, error) {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "meshdrop"},
 		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
