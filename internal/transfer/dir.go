@@ -212,6 +212,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		IsBatch:    true,
 		Compressed: compressed,
 		CompLevel:  compLevel,
+		NoResume:   noResume,
 	}
 	// ディレクトリ転送でも ResumeState(DirDone) を受け取る (#247)
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
@@ -474,6 +475,9 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	}
 	if cm.Offset < 0 || cm.Size < 0 {
 		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
+	if handles[cm.FileIndex].f == nil {
+		return fmt.Errorf("chunk %d: file %d is already complete", cm.Index, cm.FileIndex)
 	}
 	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
 		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
