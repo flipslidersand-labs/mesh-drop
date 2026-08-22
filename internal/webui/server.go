@@ -89,7 +89,7 @@ type Server struct {
 	histMu  sync.Mutex
 	history []HistoryEntry
 
-	dlMu      sync.Mutex
+	dlMu      sync.RWMutex
 	downloads map[string]string // id → abs file path
 	recvDir   string
 }
@@ -483,9 +483,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 // handleDownload serves a received file for browser download.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
-	s.dlMu.Lock()
+	s.dlMu.RLock()
 	path, ok := s.downloads[id]
-	s.dlMu.Unlock()
+	s.dlMu.RUnlock()
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
