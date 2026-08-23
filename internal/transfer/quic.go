@@ -430,7 +430,9 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // doReceiveFileResume はシングルファイルを resume 対応で受信する。
 // cp は acceptMetaDispatch で取得済みのチェックポイント。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
-func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) error {
+// #359: 一時ファイル (<outPath>.meshdrop.tmp) へ書き込み、ハッシュ検証成功後に
+// os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
+func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) (retErr error) {
 	defer conn.CloseWithError(0, "done")
 
 	if meta.Chunks < 0 {
@@ -441,6 +443,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	if err := sanitizeName(outPath); err != nil {
 		return fmt.Errorf("invalid file name in metadata: %w", err)
 	}
+	tmpPath := outPath + ".meshdrop.tmp"
 	if cp == nil {
 		cp = loadOrCreate(outPath, meta)
 	}
@@ -467,18 +470,23 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			meta.Name, meta.Size, meta.Chunks)
 	}
 
-	f, err := os.OpenFile(outPath, os.O_RDWR|os.O_CREATE, 0o644)
+	// #359: 一時ファイルを開く（resume 時は既存の tmp を再利用し進捗を引き継ぐ）。
+	f, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		f.Close()
+		if retErr != nil {
+			os.Remove(tmpPath) //nolint:errcheck
+		}
+	}()
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
-		return fmt.Errorf("stat %s: %w", outPath, err)
+		return fmt.Errorf("stat %s: %w", tmpPath, err)
 	}
 	if info.Size() != meta.Size {
 		if err := f.Truncate(meta.Size); err != nil {
-			f.Close()
 			return err
 		}
 	}
@@ -486,20 +494,20 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	// #169: Zero-byte file — nothing to receive, just verify hash and finish.
 	if meta.Chunks == 0 {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			f.Close()
 			return err
 		}
 		got, err := hashReader(f)
-		f.Close()
 		if err != nil {
 			return err
 		}
 		if meta.Hash != "" && got != meta.Hash {
-			_ = os.Remove(outPath)
 			cp.finish()
 			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 		}
 		cp.finish()
+		if err := os.Rename(tmpPath, outPath); err != nil {
+			return err
+		}
 		fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
 		fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 		return nil
@@ -556,26 +564,26 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 
 	for e := range errCh {
 		if e != nil {
-			f.Close()
 			return e
 		}
 	}
 
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		f.Close()
 		return err
 	}
 	got, err := hashReader(f)
-	f.Close()
 	if err != nil {
 		return err
 	}
 	if meta.Hash != "" && got != meta.Hash {
-		_ = os.Remove(outPath)
 		cp.finish()
 		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 	}
 	cp.finish()
+	// #359: ハッシュ検証成功後にアトミックリネームで最終パスへ移動する。
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return err
+	}
 	fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
 	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
