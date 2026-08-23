@@ -93,7 +93,7 @@ func TestDataPath_XDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
 	got := DataPath("tofu.json")
 	want := "/custom/data/meshdrop/tofu.json"
-	if got != want {
+	if filepath.ToSlash(got) != filepath.ToSlash(want) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
