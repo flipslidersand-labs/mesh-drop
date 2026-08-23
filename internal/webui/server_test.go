@@ -317,3 +317,29 @@ func TestSecureHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestWebUIRateLimit verifies that the per-IP rate limiter returns 429 after
+// the burst limit (10) is exhausted.
+func TestWebUIRateLimit(t *testing.T) {
+	rl := newRateLimiter()
+	handler := rl.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const burst = 10
+	var lastCode int
+	for i := 0; i < burst+5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+		// Simulate all requests from the same IP (127.0.0.1).
+		req.RemoteAddr = fmt.Sprintf("127.0.0.1:%d", 50000+i)
+		// Use the same source IP to exhaust one limiter.
+		req.RemoteAddr = "127.0.0.1:12345"
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		lastCode = rr.Code
+	}
+
+	if lastCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 after burst exhausted, got %d", lastCode)
+	}
+}
