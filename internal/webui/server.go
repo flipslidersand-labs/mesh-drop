@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -505,8 +506,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := filepath.Base(path)
-	escaped := strings.ReplaceAll(name, `"`, `\"`)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, escaped))
+	// #258: mime.FormatMediaType for RFC 6266 compliant escaping
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, path)
 }
 
@@ -536,7 +537,8 @@ func secureHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
 		next.ServeHTTP(w, r)
 	})
 }
