@@ -18,8 +18,9 @@ import (
 )
 
 type fileHandle struct {
-	f    *os.File
-	path string
+	f       *os.File
+	path    string // 最終出力パス
+	tmpPath string // 一時ファイルパス (#359); 空文字列なら一時ファイルなし（完了済みファイル等）
 }
 
 // chunkAssignment はバッチ転送における1チャンクとそのファイルの対応。
@@ -352,13 +353,14 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	closed := make([]bool, len(meta.Files))
 	defer func() {
 		if retErr != nil {
-			// エラー時：未クローズのファイルを close して削除（完了済みは消さない）
+			// エラー時：未クローズのファイルを close して一時ファイルを削除（完了済みは消さない）
+			// #359: 最終パス (h.path) ではなく一時ファイル (h.tmpPath) を削除する。
 			for i, h := range handles {
 				if !closed[i] && h.f != nil {
 					h.f.Close()
 				}
-				if _, ok := doneSet[meta.Files[i].Path]; h.path != "" && !ok {
-					os.Remove(h.path)
+				if h.tmpPath != "" {
+					os.Remove(h.tmpPath) //nolint:errcheck
 				}
 			}
 		}
@@ -383,11 +385,13 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 			closed[i] = true // defer でクローズ/削除をスキップ
 			continue
 		}
-		f, err := os.OpenFile(absOut, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+		// #359: 一時ファイルへ書き込み、ハッシュ検証成功後にアトミックリネームする。
+		tmpOut := absOut + ".meshdrop.tmp"
+		f, err := os.OpenFile(tmpOut, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			return err
 		}
-		handles[i] = fileHandle{f: f, path: absOut}
+		handles[i] = fileHandle{f: f, path: absOut, tmpPath: tmpOut}
 		if err := f.Truncate(fm.Size); err != nil {
 			return err
 		}
@@ -439,11 +443,12 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	}
 
 	// ハッシュ検証（完了済みファイルは acceptMetaDispatch で検証済みなのでスキップ）
+	// #359: 検証成功後に一時ファイルをアトミックリネームして最終パスへ移動する。
 	for i, fm := range meta.Files {
 		if _, done := doneSet[fm.Path]; done {
 			continue
 		}
-		fh, err := os.Open(handles[i].path)
+		fh, err := os.Open(handles[i].tmpPath)
 		if err != nil {
 			return err
 		}
@@ -455,6 +460,9 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if fm.Hash != "" && got != fm.Hash {
 			return fmt.Errorf("%w: %s\n  want: %s...\n   got: %s...",
 				ErrHashMismatch, fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
+		}
+		if err := os.Rename(handles[i].tmpPath, handles[i].path); err != nil {
+			return err
 		}
 	}
 
