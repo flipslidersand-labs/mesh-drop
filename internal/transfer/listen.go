@@ -55,7 +55,7 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, outDir, peerKey, dirDone)
+		return doReceiveDir(ctx, conn, meta, outDir, peerKey, dirDone, false)
 	default:
 		outPath := filepath.Join(outDir, filepath.Base(meta.Name))
 		if err := receiveFileToPath(ctx, conn, meta, cp, peerKey, outPath); err != nil {

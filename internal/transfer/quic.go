@@ -68,43 +68,43 @@ func NewTLSBundle() (*TLSBundle, error) {
 // ListenWithBundle は TLSBundle を使って QUIC で 1 接続を待ち受ける。
 // #160: Use the pre-generated TLSBundle so the fingerprint advertised via mDNS
 // matches the TLS cert used by the listener.
-func ListenWithBundle(ctx context.Context, addr string, bundle *TLSBundle) error {
+func ListenWithBundle(ctx context.Context, addr string, bundle *TLSBundle, verify bool) error {
 	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
 	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
 	ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	return acceptAndDispatch(ctx, ln)
+	return acceptAndDispatch(ctx, ln, verify)
 }
 
 // ListenNATWithBundle は TLSBundle を使って既存の UDP ソケット上で QUIC リスナーを起動する。
-func ListenNATWithBundle(ctx context.Context, udpConn *net.UDPConn, bundle *TLSBundle) error {
+func ListenNATWithBundle(ctx context.Context, udpConn *net.UDPConn, bundle *TLSBundle, verify bool) error {
 	fmt.Printf("TLS fingerprint (SHA-256): %x\n", bundle.Fingerprint)
 	fmt.Printf("  Pass to sender: --fingerprint %x\n", bundle.Fingerprint)
 	ln, err := quic.Listen(udpConn, bundle.Config, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
-	return acceptAndDispatch(ctx, ln)
+	return acceptAndDispatch(ctx, ln, verify)
 }
 
 // Listen は QUIC で 1 接続を待ち受けファイル/ディレクトリ/パイプを受信する。
-func Listen(ctx context.Context, addr string) error {
+func Listen(ctx context.Context, addr string, verify bool) error {
 	bundle, err := NewTLSBundle()
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	return ListenWithBundle(ctx, addr, bundle)
+	return ListenWithBundle(ctx, addr, bundle, verify)
 }
 
 // ListenNAT は既存の UDP ソケット上で QUIC リスナーを起動し受信する。
-func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
+func ListenNAT(ctx context.Context, udpConn *net.UDPConn, verify bool) error {
 	bundle, err := NewTLSBundle()
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	return ListenNATWithBundle(ctx, udpConn, bundle)
+	return ListenNATWithBundle(ctx, udpConn, bundle, verify)
 }
 
 // Send は addr へ QUIC 接続し filePath を並列チャンクで転送する。
@@ -136,14 +136,14 @@ func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, f
 
 // --- accept & dispatch ---
 
-func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
+func acceptAndDispatch(ctx context.Context, ln *quic.Listener, verify bool) error {
 	defer ln.Close()
 	fmt.Printf("Waiting for transfer on %s ...\n", ln.Addr())
 	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
 	}
-	return dispatchConn(ctx, conn)
+	return dispatchConn(ctx, conn, verify)
 }
 
 // appErrCodeTOFU は TOFU 検証失敗時に送信側へ通知する QUIC アプリケーションエラーコード。
@@ -152,7 +152,7 @@ const appErrCodeTOFU quic.ApplicationErrorCode = 2
 
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
 // シングルファイル/ディレクトリモードで制御ストリームで ResumeState を返送してから受信する。
-func dispatchConn(ctx context.Context, conn *quic.Conn) error {
+func dispatchConn(ctx context.Context, conn *quic.Conn, verify bool) error {
 	meta, cp, peerKey, dirDone, err := acceptMetaDispatch(ctx, conn, ".")
 	if err != nil {
 		code := quic.ApplicationErrorCode(1)
@@ -166,7 +166,7 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	case meta.IsPipe:
 		return doReceivePipeConn(ctx, conn, peerKey)
 	case meta.IsBatch:
-		return doReceiveDir(ctx, conn, meta, ".", peerKey, dirDone)
+		return doReceiveDir(ctx, conn, meta, ".", peerKey, dirDone, verify)
 	default:
 		return doReceiveFileResume(ctx, conn, meta, cp, peerKey, ".")
 	}
