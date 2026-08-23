@@ -1,0 +1,56 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Run benchmarks
+        run: go test -bench=. -benchmem -count=3 -timeout=300s ./... 2>&1 | tee /tmp/bench.txt
+
+      - name: Initialize gh-pages branch if missing
+        run: |
+          if ! git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git checkout --orphan gh-pages
+            git rm -rf . --quiet
+            mkdir -p benchmarks
+            echo '{"entries":{}}' > benchmarks/data.json
+            git add benchmarks/data.json
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -m "chore: initialize gh-pages for benchmark data"
+            git push origin gh-pages
+            git checkout -
+          fi
+
+      - name: Store / compare benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: go
+          output-file-path: /tmp/bench.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Push to gh-pages only on master; PRs only get a comment.
+          auto-push: ${{ github.ref == 'refs/heads/master' }}
+          comment-on-alert: true
+          alert-threshold: "120%"
+          fail-on-alert: false
+          comment-always: false
+          summary-always: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: benchmarks
