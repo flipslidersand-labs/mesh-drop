@@ -3,6 +3,7 @@ package transfer
 import (
 	"bytes"
 	"io"
+	"os"
 	"testing"
 )
 
@@ -87,6 +88,46 @@ func TestMetaSerializationBackwardCompat(t *testing.T) {
 	}
 	if got.Compressed != false {
 		t.Errorf("want Compressed=false for old meta, got true")
+	}
+}
+
+func TestIsAlreadyCompressed_KnownFormats(t *testing.T) {
+	cases := []struct {
+		name    string
+		header  []byte
+		want    bool
+	}{
+		{"gzip", []byte{0x1F, 0x8B, 0x08, 0x00}, true},
+		{"zstd", []byte{0x28, 0xB5, 0x2F, 0xFD, 0x04, 0x00}, true},
+		{"zip", []byte{0x50, 0x4B, 0x03, 0x04, 0x14, 0x00}, true},
+		{"png", []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, true},
+		{"jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}, true},
+		{"plain text", []byte("Hello, world!\n"), false},
+		{"go source", []byte("package main\n"), false},
+		{"empty-ish", []byte{0x00, 0x00}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := os.CreateTemp(t.TempDir(), "magic*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Write(tc.header); err != nil {
+				t.Fatal(err)
+			}
+			path := f.Name()
+			f.Close()
+			got := isAlreadyCompressed(path)
+			if got != tc.want {
+				t.Errorf("isAlreadyCompressed(%q header) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsAlreadyCompressed_NonExistentFile(t *testing.T) {
+	if isAlreadyCompressed("/nonexistent/path/file.gz") {
+		t.Error("expected false for nonexistent file")
 	}
 }
 

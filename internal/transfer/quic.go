@@ -279,6 +279,13 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, 
 		return fmt.Errorf("nChunks must be >= 1, got %d", nChunks)
 	}
 
+	// #329: 既圧縮フォーマット（jpeg, png, zip, mp4 …）は zstd 圧縮してもサイズが増える
+	// だけなので、自動でスキップする。
+	if compressed && isAlreadyCompressed(filePath) {
+		fmt.Printf("  Skipping compression: %s is already a compressed format\n", filepath.Base(filePath))
+		compressed = false
+	}
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
