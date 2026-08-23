@@ -614,6 +614,51 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	fmt.Printf("✓ Hash OK  (%d files)\n", len(meta.Files))
 	fmt.Printf("✓ Saved: %s/ (%d files, %d bytes)\n", outDir, len(meta.Files), totalSize)
 	fmt.Printf("  Elapsed: %s  Throughput: %.2f MB/s\n", elapsed.Round(time.Millisecond), mbps)
+
+	// #271: opt-in post-receive integrity re-verification from disk.
+	if EnableVerify {
+		if err := verifyAfterReceive(outDir, meta.Files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnableVerify enables an additional on-disk re-read of all received files
+// after doReceiveDir completes to catch filesystem corruption (#271).
+// Set to true via --verify CLI flag.
+var EnableVerify bool
+
+// verifyAfterReceive re-reads each received file from disk and compares its
+// BLAKE3 hash against FileMeta.Hash. Files with an empty Hash are skipped.
+func verifyAfterReceive(outDir string, files []FileMeta) error {
+	var failed []string
+	for _, fm := range files {
+		if fm.Hash == "" {
+			continue
+		}
+		absPath := filepath.Join(outDir, fm.Path)
+		f, err := os.Open(absPath)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s: open error: %v", fm.Path, err))
+			continue
+		}
+		got, err := hashReader(f)
+		f.Close()
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s: hash error: %v", fm.Path, err))
+			continue
+		}
+		if got != fm.Hash {
+			fmt.Printf("[INTEGRITY FAIL] %s: expected=%s... got=%s...\n",
+				fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
+			failed = append(failed, fm.Path)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("integrity verification failed for %d file(s): %v", len(failed), failed)
+	}
+	fmt.Printf("[OK] integrity verified: %d files\n", len(files))
 	return nil
 }
 

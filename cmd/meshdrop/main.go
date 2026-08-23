@@ -61,6 +61,7 @@ func main() {
 				slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 					Level: slog.LevelDebug,
 				})))
+				transfer.Verbose = true // #273: enable connection latency output
 			}
 			return nil
 		},
@@ -161,6 +162,7 @@ func cmdReceive() *cobra.Command {
 	var port int
 	var relayURL string
 	var pipe bool
+	var verify bool
 	cmd := &cobra.Command{
 		Use:   "receive",
 		Short: "Receive a file/directory (LAN mDNS, or --relay for NAT traversal)",
@@ -184,6 +186,8 @@ func cmdReceive() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+
+			transfer.EnableVerify = verify // #271
 
 			addr := fmt.Sprintf("0.0.0.0:%d", port)
 
@@ -217,6 +221,7 @@ func cmdReceive() *cobra.Command {
 	cmd.Flags().IntVarP(&port, "port", "p", discovery.DefaultPort, "listen port")
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay server URL for NAT traversal (e.g. http://relay:8080)")
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "write received data to stdout instead of a file")
+	cmd.Flags().BoolVar(&verify, "verify", false, "re-read and verify BLAKE3 hash of each received file after transfer (#271)")
 	return cmd
 }
 

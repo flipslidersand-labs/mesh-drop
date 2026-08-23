@@ -111,6 +111,10 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
 // noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
+// Verbose enables connection-latency and diagnostic output (#273).
+// Set to true via --verbose CLI flag.
+var Verbose bool
+
 func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	t0 := time.Now()
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
@@ -428,9 +432,13 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 	}
 	defer stream.Close()
 
+	tNoise := time.Now()
 	ns, peerKey, err := controlHandshakeInitiator(stream)
 	if err != nil {
 		return ResumeState{}, nil, err
+	}
+	if Verbose {
+		fmt.Printf("  Noise XX:    %v\n", time.Since(tNoise).Round(time.Millisecond))
 	}
 
 	if err := writeMeta(ns, meta); err != nil {
