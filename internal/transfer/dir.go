@@ -222,6 +222,24 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	}
 	fmt.Printf("  %d file(s) found\n", len(files))
 
+	// #329: ディレクトリ内のファイルの大半が既圧縮フォーマットなら --compress をスキップする。
+	// 閾値: 圧縮済みファイルのサイズ合計が全体の 80% を超えたらスキップ。
+	if compressed {
+		var compressedSize, totalSz int64
+		for _, fm := range files {
+			totalSz += fm.Size
+			p := filepath.Join(dirPath, filepath.FromSlash(fm.Path))
+			if isAlreadyCompressed(p) {
+				compressedSize += fm.Size
+			}
+		}
+		if totalSz > 0 && compressedSize*10 >= totalSz*8 { // >= 80%
+			fmt.Printf("  Skipping compression: %.0f%% of content is already compressed\n",
+				float64(compressedSize)/float64(totalSz)*100)
+			compressed = false
+		}
+	}
+
 	assignments := assignChunks(files, nChunks)
 	totalSize := totalDirSize(files)
 
