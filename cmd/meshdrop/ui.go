@@ -16,6 +16,10 @@ import (
 	"github.com/flipslidersand/mesh-drop/internal/webui"
 )
 
+// uiAuthToken is set from --auth-token flag (or config.yaml).
+// Declared at package level so it is accessible from cmdUI and tests.
+var uiAuthToken string
+
 func cmdUI() *cobra.Command {
 	var port int
 	var noOpen bool
@@ -24,6 +28,19 @@ func cmdUI() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ui",
 		Short: "Start local Web UI (drag & drop file transfer)",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := loadConfig(); err != nil {
+				return err
+			}
+			// config.yaml から未指定フラグを補完する
+			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
+				port = globalCfg.Port
+			}
+			if !cmd.Flags().Changed("auth-token") && globalCfg.AuthToken != "" {
+				uiAuthToken = globalCfg.AuthToken
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			url := fmt.Sprintf("http://%s", addr)

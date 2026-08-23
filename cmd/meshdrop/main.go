@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/term"
 	"golang.org/x/time/rate"
 
+	"github.com/flipslidersand/mesh-drop/internal/config"
 	"github.com/flipslidersand/mesh-drop/internal/discovery"
 	"github.com/flipslidersand/mesh-drop/internal/nat"
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
@@ -32,8 +34,22 @@ var version string
 var allowNoTOFU bool
 
 // verbose はグローバルフラグ --verbose/-v で設定される。
-// 有効時は slog.LevelDebug を使用し、内部パッケージの詳細ログを stderr に出力する。
 var verbose bool
+
+// globalCfg は ~/.meshdrop/config.yaml から読み込んだ設定を保持する。
+var globalCfg *config.Config
+
+func loadConfig() error {
+	if globalCfg != nil {
+		return nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	globalCfg = cfg
+	return nil
+}
 
 func main() {
 	root := &cobra.Command{
@@ -52,10 +68,56 @@ func main() {
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging to stderr")
-	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI())
+	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI(), cmdConfig())
 	root.InitDefaultCompletionCmd()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
+	}
+}
+
+// cmdConfig returns the "config" parent command with subcommands.
+func cmdConfig() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Manage MeshDrop configuration",
+	}
+	cmd.AddCommand(cmdConfigInit(), cmdConfigPath())
+	return cmd
+}
+
+// cmdConfigInit creates ~/.meshdrop/config.yaml with a commented template.
+func cmdConfigInit() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Create a default config file at " + config.ConfigPath(),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := config.ConfigPath()
+			if path == "" {
+				return fmt.Errorf("could not determine config path (HOME not set)")
+			}
+			if _, err := os.Stat(path); err == nil {
+				return fmt.Errorf("config file already exists: %s", path)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return fmt.Errorf("create config dir: %w", err)
+			}
+			if err := os.WriteFile(path, []byte(config.InitTemplate), 0o600); err != nil {
+				return fmt.Errorf("write config: %w", err)
+			}
+			fmt.Printf("Created config file: %s\n", path)
+			return nil
+		},
+	}
+}
+
+// cmdConfigPath prints the path that meshdrop uses for its config file.
+func cmdConfigPath() *cobra.Command {
+	return &cobra.Command{
+		Use:   "path",
+		Short: "Print the config file path",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(config.ConfigPath())
+		},
 	}
 }
 
@@ -107,6 +169,16 @@ func cmdReceive() *cobra.Command {
 		// PersistentPreRunE を定義すると cobra v1 がチェーンせず initSessionOrWarn が
 		// 無音スキップされる。リーフコマンドには PreRunE が適切。
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := loadConfig(); err != nil {
+				return err
+			}
+			// config.yaml から未指定フラグを補完する
+			if !cmd.Flags().Changed("relay") && globalCfg.Relay != "" {
+				relayURL = globalCfg.Relay
+			}
+			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
+				port = globalCfg.Port
+			}
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -222,6 +294,16 @@ func cmdSend() *cobra.Command {
 		// PersistentPreRunE を定義すると cobra v1 がチェーンせず initSessionOrWarn が
 		// 無音スキップされる。リーフコマンドには PreRunE が適切。
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := loadConfig(); err != nil {
+				return err
+			}
+			// config.yaml から未指定フラグを補完する
+			if !cmd.Flags().Changed("relay") && globalCfg.Relay != "" {
+				relayURL = globalCfg.Relay
+			}
+			if !cmd.Flags().Changed("rate-limit") && globalCfg.RateLimit != "" {
+				rateLimitStr = globalCfg.RateLimit
+			}
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
