@@ -310,3 +310,71 @@ func TestReadMeta_MaxValidSize(t *testing.T) {
 		t.Errorf("Size=maxFileSize should be accepted: %v", err)
 	}
 }
+
+// TestReadMeta_NameControlChars verifies that Meta.Name containing control
+// characters, null bytes, or invalid UTF-8 is rejected (#325).
+func TestReadMeta_NameControlChars(t *testing.T) {
+	cases := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"normal.txt", false},
+		{"日本語ファイル.txt", false},
+		{"file with spaces.bin", false},
+		{"file-name_v2.tar.gz", false},
+		{"null\x00byte.txt", true},
+		{"ctrl\x01char.txt", true},
+		{"newline\ninjection.txt", true},
+		{"tab\there.txt", true},
+		{"del\x7fchar.txt", true},
+		{"\x1besc.txt", true},
+		{string([]byte{0xff, 0xfe}) + ".txt", true}, // invalid UTF-8
+	}
+
+	for _, c := range cases {
+		m := Meta{Name: c.name, Size: 1, Chunks: 1}
+		raw, err := writeRawMeta(m)
+		if err != nil {
+			t.Fatalf("name=%q: marshal error: %v", c.name, err)
+		}
+		_, err = readMeta(bytes.NewReader(raw))
+		if c.wantErr && err == nil {
+			t.Errorf("name=%q: expected error, got nil", c.name)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("name=%q: unexpected error: %v", c.name, err)
+		}
+	}
+}
+
+// TestReadMeta_FilePathControlChars verifies that FileMeta.Path containing
+// control characters is rejected (#325).
+func TestReadMeta_FilePathControlChars(t *testing.T) {
+	cases := []struct {
+		path    string
+		wantErr bool
+	}{
+		{"subdir/normal.txt", false},
+		{"subdir/null\x00byte.txt", true},
+		{"subdir/ctrl\x01char.txt", true},
+		{"subdir/newline\ninjection.txt", true},
+	}
+
+	for _, c := range cases {
+		m := Meta{
+			Name: "dir", Size: 1, Chunks: 1, IsBatch: true,
+			Files: []FileMeta{{Path: c.path, Size: 1, Hash: "aabb"}},
+		}
+		raw, err := writeRawMeta(m)
+		if err != nil {
+			t.Fatalf("path=%q: marshal error: %v", c.path, err)
+		}
+		_, err = readMeta(bytes.NewReader(raw))
+		if c.wantErr && err == nil {
+			t.Errorf("path=%q: expected error, got nil", c.path)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("path=%q: unexpected error: %v", c.path, err)
+		}
+	}
+}
