@@ -26,12 +26,20 @@ import (
 // Meta.IsPipe=true   → doReceivePipeConn へ dispatch
 // それ以外           → doReceiveFileResume（resume 対応シングルファイル）
 
+// defaultIdleTimeout is the QUIC connection idle timeout (#363).
+// After this duration with no packets, the connection is closed.
+const defaultIdleTimeout = 120 * time.Second
+
+// defaultKeepAlivePeriod is the interval at which QUIC keep-alive pings are sent.
+// Must be less than defaultIdleTimeout to prevent spurious disconnections.
+const defaultKeepAlivePeriod = 30 * time.Second
+
 // quicConfig returns a *quic.Config with idle timeout and keep-alive set.
 // #179: Prevent connections from hanging indefinitely by enforcing idle timeout.
 func quicConfig() *quic.Config {
 	return &quic.Config{
-		MaxIdleTimeout:  120 * time.Second,
-		KeepAlivePeriod: 30 * time.Second,
+		MaxIdleTimeout:  defaultIdleTimeout,
+		KeepAlivePeriod: defaultKeepAlivePeriod,
 	}
 }
 
