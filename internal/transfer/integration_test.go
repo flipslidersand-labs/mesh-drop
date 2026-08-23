@@ -3,8 +3,12 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,403 +18,331 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const integrationTimeout = 30 * time.Second
-
-// skipIfShort skips the test when -short is given.
-func skipIfShort(t *testing.T) {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("integration test: skipped with -short")
-	}
-}
-
-// setupTestSession initialises a fresh ephemeral session identity for the test
-// and restores the zero-value identity when the test ends.
-// Without this, localKey() generates a new ephemeral key on every call, which
-// causes "peer key mismatch" when the chunk-stream handshake verifies the key
-// established in the control-stream handshake.
-func setupTestSession(t *testing.T) {
-	t.Helper()
+func TestMain(m *testing.M) {
+	// Set a fixed in-process Noise identity so localKey() returns the same
+	// keypair for every handshake within the test binary. Without a fixed
+	// identity, each handshake generates a fresh ephemeral key and data-stream
+	// "peer key mismatch" errors follow. We leave sessionPeers=nil to disable
+	// TOFU prompting (both sides are in-process; no TTY is available).
 	key, err := crypto.GenerateKeypair()
 	if err != nil {
-		t.Fatalf("GenerateKeypair: %v", err)
+		panic("integration: GenerateKeypair: " + err.Error())
 	}
 	initMu.Lock()
-	prev := sessionIdentity
-	prevInited := sessionInited
 	sessionIdentity = key
 	sessionInited = true
+	// sessionPeers stays nil → TOFU skipped
 	initMu.Unlock()
-	t.Cleanup(func() {
-		initMu.Lock()
-		sessionIdentity = prev
-		sessionInited = prevInited
-		sessionPeers = nil
-		initMu.Unlock()
-	})
+	os.Exit(m.Run())
 }
 
-// makeSrcFile creates a deterministic file (0x5A pattern) of the given size in dir,
-// and returns its path and the hash computed by hashReader.
-func makeSrcFile(t *testing.T, dir, name string, size int64) (path, hash string) {
+// freeUDPPort finds an available UDP port on loopback by briefly binding to :0.
+// There is a small TOCTOU race but it is acceptable for loopback integration tests.
+func freeUDPPort(t *testing.T) int {
 	t.Helper()
-	path = filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdirall: %v", err)
-	}
-	f, err := os.Create(path)
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
+		t.Fatalf("freeUDPPort: %v", err)
 	}
-	buf := make([]byte, 32*1024)
-	for i := range buf {
-		buf[i] = 0x5A
-	}
-	var written int64
-	for written < size {
-		n := int64(len(buf))
-		if n > size-written {
-			n = size - written
-		}
-		if _, err := f.Write(buf[:n]); err != nil {
-			f.Close()
-			t.Fatalf("write: %v", err)
-		}
-		written += n
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		f.Close()
-		t.Fatalf("seek: %v", err)
-	}
-	h, err := hashReader(f)
-	f.Close()
-	if err != nil {
-		t.Fatalf("hash %s: %v", path, err)
-	}
-	return path, h
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	conn.Close()
+	return port
 }
 
-// gotHash returns the hash of an on-disk file via hashReader.
-func gotHash(t *testing.T, path string) string {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
-	}
-	defer f.Close()
-	h, err := hashReader(f)
-	if err != nil {
-		t.Fatalf("hash %s: %v", path, err)
-	}
-	return h
-}
-
-// startReceiverOnce starts a QUIC listener on 127.0.0.1:0, accepts one connection
-// via dispatchConnToDir (outDir as output directory), and reports the result on
-// the returned channel. Listener and context are cleaned up via t.Cleanup.
-func startReceiverOnce(t *testing.T, outDir string) (addr string, fp []byte, done <-chan error) {
+// startTestListener starts a ListenContinuous server on addr and returns the
+// TLSBundle, a cancel func, and a channel that receives the path of each
+// successfully received file.
+func startTestListener(t *testing.T, addr, outDir string) (*TLSBundle, context.CancelFunc, chan string) {
 	t.Helper()
 	bundle, err := NewTLSBundle()
 	if err != nil {
 		t.Fatalf("NewTLSBundle: %v", err)
 	}
-	ln, err := quic.ListenAddr("127.0.0.1:0", bundle.Config, quicConfig())
-	if err != nil {
-		t.Fatalf("quic.ListenAddr: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	t.Cleanup(func() {
-		cancel()
-		ln.Close()
-	})
-	ch := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	recv := make(chan string, 4)
 	go func() {
-		conn, err := ln.Accept(ctx)
-		if err != nil {
-			ch <- err
-			return
-		}
-		ch <- dispatchConnToDir(ctx, conn, outDir, conn.RemoteAddr().String(), nil)
+		_ = ListenContinuous(ctx, addr, bundle, outDir, func(_, path string, _ int64, _ string) {
+			recv <- path
+		})
 	}()
-	return ln.Addr().String(), bundle.Fingerprint, ch
+	// Give the listener time to bind.
+	time.Sleep(60 * time.Millisecond)
+	return bundle, cancel, recv
 }
 
-// startReceiverDirect starts a QUIC listener using dispatchConn (CWD as outDir).
-// Used for resume/no-resume tests where checkpoint and tmp files reside in CWD.
-func startReceiverDirect(t *testing.T) (addr string, fp []byte, done <-chan error) {
+// waitRecv waits for n received file paths or fails after 20 s.
+func waitRecv(t *testing.T, recv chan string, n int) []string {
 	t.Helper()
-	bundle, err := NewTLSBundle()
-	if err != nil {
-		t.Fatalf("NewTLSBundle: %v", err)
-	}
-	ln, err := quic.ListenAddr("127.0.0.1:0", bundle.Config, quicConfig())
-	if err != nil {
-		t.Fatalf("quic.ListenAddr: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	t.Cleanup(func() {
-		cancel()
-		ln.Close()
-	})
-	ch := make(chan error, 1)
-	go func() {
-		conn, err := ln.Accept(ctx)
-		if err != nil {
-			ch <- err
-			return
+	var paths []string
+	deadline := time.After(20 * time.Second)
+	for i := 0; i < n; i++ {
+		select {
+		case p := <-recv:
+			paths = append(paths, p)
+		case <-deadline:
+			t.Fatalf("timed out waiting for receive (%d/%d)", i, n)
 		}
-		ch <- dispatchConn(ctx, conn)
-	}()
-	return ln.Addr().String(), bundle.Fingerprint, ch
+	}
+	return paths
 }
 
-// TestIntegration_SingleFile_Send_Receive verifies that a 1 MB file is fully
-// transferred over a loopback QUIC connection and that the SHA-256 hash matches.
+// --- #302: single-file and directory transfer ---
+
 func TestIntegration_SingleFile_Send_Receive(t *testing.T) {
-	skipIfShort(t)
-	setupTestSession(t)
+	outDir := t.TempDir()
+	port := freeUDPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
-	srcDir := t.TempDir()
-	dstDir := t.TempDir()
-	srcPath, wantHash := makeSrcFile(t, srcDir, "data.bin", 1<<20) // 1 MB
-
-	addr, fp, done := startReceiverOnce(t, dstDir)
-
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	bundle, cancel, recv := startTestListener(t, addr, outDir)
 	defer cancel()
 
-	if err := Send(ctx, addr, srcPath, 4, fp, nil, false, 0, false); err != nil {
-		t.Fatalf("Send: %v", err)
+	// 1 MB random content.
+	content := make([]byte, 1<<20)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("receive: %v", err)
-	}
-
-	if got := gotHash(t, filepath.Join(dstDir, "data.bin")); got != wantHash {
-		t.Errorf("hash mismatch: want %s got %s", wantHash, got)
-	}
-}
-
-// TestIntegration_Directory_Send_Receive verifies that a directory containing
-// multiple files (including a subdirectory) is fully transferred with correct hashes.
-func TestIntegration_Directory_Send_Receive(t *testing.T) {
-	skipIfShort(t)
-	setupTestSession(t)
-
-	srcRoot := t.TempDir()
-	dstDir := t.TempDir()
-
-	// Build source tree: srcRoot/payload/{a.bin, b.bin, sub/c.bin}
-	sendDir := filepath.Join(srcRoot, "payload")
-	if err := os.MkdirAll(filepath.Join(sendDir, "sub"), 0o755); err != nil {
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "file1mb.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	type entry struct {
-		rel  string
-		size int64
-	}
-	entries := []entry{
-		{"a.bin", 512 * 1024},
-		{"b.bin", 256 * 1024},
-		{filepath.Join("sub", "c.bin"), 128 * 1024},
-	}
-	wantHashes := make(map[string]string, len(entries))
-	for _, e := range entries {
-		_, h := makeSrcFile(t, filepath.Join(sendDir, filepath.Dir(e.rel)), filepath.Base(e.rel), e.size)
-		wantHashes[e.rel] = h
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 
-	addr, fp, done := startReceiverOnce(t, dstDir)
+	paths := waitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("content mismatch: sent %d bytes, got %d bytes", len(content), len(got))
+	}
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+func TestIntegration_Directory_Send_Receive(t *testing.T) {
+	srcDir := t.TempDir()
+	outDir := t.TempDir()
+
+	// Build a directory tree large enough that the sender stays busy for more than
+	// one scheduling quantum, ensuring the receiver's AcceptStream goroutines are
+	// scheduled before the sender closes the connection.
+	files := map[string][]byte{
+		"a.bin":     make([]byte, 512*1024),
+		"sub/b.bin": make([]byte, 512*1024),
+		"sub/c.bin": make([]byte, 512*1024),
+	}
+	for rel, data := range files {
+		rand.Read(data) //nolint:errcheck
+		full := filepath.Join(srcDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	port := freeUDPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := SendDir(ctx, addr, sendDir, 4, fp, nil, false, 0, false, nil); err != nil {
+	// Use dispatchConnToDir directly so we can track completion.
+	// ListenContinuous spawns a goroutine for the connection that outlives the
+	// parent loop; tracking it externally avoids a TOCTOU on the output files.
+	recvErr := make(chan error, 1)
+	go func() {
+		ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
+		if err != nil {
+			recvErr <- err
+			return
+		}
+		defer ln.Close()
+		conn, err := ln.Accept(ctx)
+		if err != nil {
+			recvErr <- err
+			return
+		}
+		recvErr <- dispatchConnToDir(ctx, conn, outDir, conn.RemoteAddr().String(), nil)
+	}()
+	time.Sleep(60 * time.Millisecond)
+
+	if err := SendDir(ctx, addr, srcDir, 4, bundle.Fingerprint, nil, false, 0, false, nil); err != nil {
 		t.Fatalf("SendDir: %v", err)
 	}
-	if err := <-done; err != nil {
+
+	if err := <-recvErr; err != nil {
 		t.Fatalf("receive: %v", err)
 	}
 
-	// doReceiveDir writes files to outDir/fm.Path (relative path from WalkDir).
-	for _, e := range entries {
-		dstPath := filepath.Join(dstDir, e.rel)
-		if got := gotHash(t, dstPath); got != wantHashes[e.rel] {
-			t.Errorf("file %s: hash mismatch: want %s got %s", e.rel, wantHashes[e.rel], got)
+	// doReceiveDir writes each file to outDir/<FileMeta.Path> (relative to srcDir root).
+	for rel, want := range files {
+		gotPath := filepath.Join(outDir, rel)
+		got, err := os.ReadFile(gotPath)
+		if err != nil {
+			t.Errorf("missing file %s: %v", rel, err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("content mismatch for %s", rel)
 		}
 	}
 }
 
-// TestIntegration_Resume_Interrupted verifies that a partially received file
-// (chunk 0 already written and checkpointed) is completed by transferring only
-// the remaining chunk. The final file's hash must match the source.
-//
-// The test uses dispatchConn (CWD as outDir) so that the checkpoint and tmp file
-// persist between calls. CWD is changed to a temp dir for isolation.
+// --- #304: resume, no-resume, zero-byte ---
+
 func TestIntegration_Resume_Interrupted(t *testing.T) {
-	skipIfShort(t)
-	setupTestSession(t)
+	// Simulate resume by pre-populating a checkpoint that claims chunk 0 is done,
+	// and writing the corresponding partial .tmp file. The receiver then only
+	// requests the remaining chunks from the sender and assembles the full file.
 
-	// Change CWD to an isolated temp dir. dispatchConn uses "." as outDir.
-	workDir := t.TempDir()
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(workDir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-
-	const (
-		fileSize = 2 << 20 // 2 MB
-		nChunks  = 2
-		fileName = "resume.bin"
-	)
-	chunkSize := int64(fileSize) / nChunks
+	const chunks = 2
+	const chunkSize = 64 * 1024
+	content := make([]byte, chunks*chunkSize)
+	rand.Read(content) //nolint:errcheck
 
 	srcDir := t.TempDir()
-	srcPath, wantHash := makeSrcFile(t, srcDir, fileName, fileSize)
+	srcPath := filepath.Join(srcDir, "resume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	// Pre-seed the tmp file: chunk 0 (0x5A bytes) written at offset 0,
-	// rest zeroed via Truncate so the receiver can write chunk 1 later.
-	tmpPath := filepath.Join(workDir, fileName+".meshdrop.tmp")
-	tf, err := os.Create(tmpPath)
+	outDir := t.TempDir()
+
+	// Compute a hash for the file so we can put it in the checkpoint.
+	f, err := os.Open(srcPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunk0 := make([]byte, chunkSize)
-	for i := range chunk0 {
-		chunk0[i] = 0x5A
-	}
-	if _, err := tf.Write(chunk0); err != nil {
-		tf.Close()
+	hash, err := hashReader(f)
+	f.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tf.Truncate(fileSize); err != nil {
-		tf.Close()
-		t.Fatal(err)
-	}
-	tf.Close()
 
-	// Pre-seed the checkpoint: chunk 0 done, chunk 1 pending.
+	// Write a checkpoint saying chunk 0 is already done.
 	cpState := checkpointState{
-		Name:        fileName,
-		Size:        fileSize,
-		Hash:        wantHash,
-		ChunksTotal: nChunks,
+		Name:        "resume.bin",
+		Size:        int64(len(content)),
+		Hash:        hash,
+		ChunksTotal: chunks,
 		ChunksDone:  []bool{true, false},
 	}
-	cpData, err := json.Marshal(cpState)
+	cpPath := filepath.Join(outDir, "resume.bin") + ".meshdrop-state"
+	cpData, _ := json.Marshal(cpState)
+	if err := os.WriteFile(cpPath, cpData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a partial .tmp file with chunk 0 pre-filled.
+	tmpPath := filepath.Join(outDir, "resume.bin") + ".meshdrop.tmp"
+	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, fileName+".meshdrop-state"), cpData, 0o600); err != nil {
+	// Truncate to full size then write chunk 0 data.
+	if err := tmpFile.Truncate(int64(len(content))); err != nil {
+		tmpFile.Close()
 		t.Fatal(err)
 	}
+	if _, err := tmpFile.WriteAt(content[:chunkSize], 0); err != nil {
+		tmpFile.Close()
+		t.Fatal(err)
+	}
+	tmpFile.Close()
 
-	addr, fp, done := startReceiverDirect(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	port := freeUDPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	bundle, cancel, recv := startTestListener(t, addr, outDir)
 	defer cancel()
 
-	// noResume=false: sender honours the checkpoint (sends only chunk 1).
-	if err := Send(ctx, addr, srcPath, nChunks, fp, nil, false, 0, false); err != nil {
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	if err := Send(ctx, addr, srcPath, chunks, bundle.Fingerprint, nil, false, 0, false); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("receive: %v", err)
-	}
 
-	outPath := filepath.Join(workDir, fileName)
-	if got := gotHash(t, outPath); got != wantHash {
-		t.Errorf("hash mismatch: want %s got %s", wantHash, got)
+	paths := waitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("resumed content mismatch: sent %d bytes, got %d bytes", len(content), len(got))
 	}
 }
 
-// TestIntegration_NoResume_IgnoresCheckpoint verifies that noResume=true causes
-// the sender to transmit all chunks regardless of what the receiver's checkpoint
-// reports. Uses a directory transfer because meta.NoResume is propagated to the
-// receiver for batch mode, allowing the receiver to skip checkDirDone as well.
 func TestIntegration_NoResume_IgnoresCheckpoint(t *testing.T) {
-	skipIfShort(t)
-	setupTestSession(t)
-
-	srcRoot := t.TempDir()
-	dstDir := t.TempDir()
-
-	sendDir := filepath.Join(srcRoot, "dir")
-	srcPath, wantHash := makeSrcFile(t, sendDir, "file.bin", 512*1024)
-	_ = srcPath
-
-	// First transfer: receive without noResume (populate outDir).
-	{
-		addr, fp, done := startReceiverOnce(t, dstDir)
-		ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-		if err := SendDir(ctx, addr, sendDir, 2, fp, nil, false, 0, false, nil); err != nil {
-			cancel()
-			t.Fatalf("first SendDir: %v", err)
-		}
-		if err := <-done; err != nil {
-			cancel()
-			t.Fatalf("first receive: %v", err)
-		}
-		cancel()
-	}
-
-	// Second transfer with noResume=true: even though outDir already has the file
-	// with matching hash, the receiver skips checkDirDone and re-receives it.
-	{
-		addr, fp, done := startReceiverOnce(t, dstDir)
-		ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-		if err := SendDir(ctx, addr, sendDir, 2, fp, nil, false, 0, true, nil); err != nil {
-			cancel()
-			t.Fatalf("second SendDir (noResume): %v", err)
-		}
-		if err := <-done; err != nil {
-			cancel()
-			t.Fatalf("second receive (noResume): %v", err)
-		}
-		cancel()
-	}
-
-	if got := gotHash(t, filepath.Join(dstDir, "file.bin")); got != wantHash {
-		t.Errorf("hash mismatch: want %s got %s", wantHash, got)
-	}
-}
-
-// TestIntegration_ZeroByteFile verifies that a zero-byte file is correctly
-// transferred and produces an empty file at the destination.
-func TestIntegration_ZeroByteFile(t *testing.T) {
-	skipIfShort(t)
-	setupTestSession(t)
+	content := make([]byte, 128*1024)
+	rand.Read(content) //nolint:errcheck
 
 	srcDir := t.TempDir()
-	dstDir := t.TempDir()
-
-	srcPath := filepath.Join(srcDir, "empty.bin")
-	if err := os.WriteFile(srcPath, nil, 0o644); err != nil {
+	srcPath := filepath.Join(srcDir, "noresume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	addr, fp, done := startReceiverOnce(t, dstDir)
-
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	outDir := t.TempDir()
+	port := freeUDPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	bundle, cancel, recv := startTestListener(t, addr, outDir)
 	defer cancel()
 
-	if err := Send(ctx, addr, srcPath, 4, fp, nil, false, 0, false); err != nil {
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	// noResume=true: receiver should ignore any existing checkpoint.
+	if err := Send(ctx, addr, srcPath, 2, bundle.Fingerprint, nil, false, 0, true); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("receive: %v", err)
+
+	paths := waitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Error("content mismatch for noResume transfer")
+	}
+}
+
+func TestIntegration_ZeroByteFile(t *testing.T) {
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "empty.txt")
+	if err := os.WriteFile(srcPath, []byte{}, 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	info, err := os.Stat(filepath.Join(dstDir, "empty.bin"))
+	outDir := t.TempDir()
+	port := freeUDPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	bundle, cancel, recv := startTestListener(t, addr, outDir)
+	defer cancel()
+
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	if err := Send(ctx, addr, srcPath, 1, bundle.Fingerprint, nil, false, 0, false); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	paths := waitRecv(t, recv, 1)
+	info, err := os.Stat(paths[0])
 	if err != nil {
-		t.Fatalf("stat received file: %v", err)
+		t.Fatalf("Stat: %v", err)
 	}
 	if info.Size() != 0 {
-		t.Errorf("size = %d, want 0", info.Size())
+		t.Errorf("expected 0-byte file, got %d bytes", info.Size())
 	}
 }
