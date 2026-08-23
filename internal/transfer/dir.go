@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
@@ -190,26 +191,29 @@ func totalDirSize(files []FileMeta) int64 {
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
 // noResume=true のとき受信側から返る DirDone を無視してフル再送する (#244)。
-func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+// #318: progressFn は転送済みバイト数(sent, total)の更新を通知するコールバック。nil 可。
+func SendDir(ctx context.Context, addr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume, progressFn)
 }
 
 // SendDirNAT は NAT Traversal 済みソケット経由でディレクトリを転送する。
 // #207: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // noResume=true のとき受信側から返る DirDone を無視してフル再送する (#244)。
-func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+// #318: progressFn は転送済みバイト数(sent, total)の更新を通知するコールバック。nil 可。
+func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, dirPath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume)
+	return doSendDir(ctx, conn, dirPath, nChunks, lim, compressed, compLevel, noResume, progressFn)
 }
 
-func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+// #317: progressFn は転送済みバイト数の更新を通知するコールバック。nil の場合は呼ばれない。
+func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
@@ -256,10 +260,17 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 
 	bar := progressbar.DefaultBytes(totalSize, "sending  ")
 
+	// #317: progressFn へ累積送信バイト数を通知するアトミックカウンタ
+	var sent atomic.Int64
+
 	// 完了済みファイルのチャンクはプログレスバーだけ進めてスキップ
 	for _, a := range assignments {
 		if _, done := doneFiles[files[a.fileIndex].Path]; done {
 			_, _ = bar.Write(make([]byte, a.size))
+			if progressFn != nil {
+				sent.Add(a.size)
+				progressFn(sent.Load(), totalSize)
+			}
 		}
 	}
 
@@ -274,7 +285,13 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 			defer wg.Done()
 			f := files[a.fileIndex]
 			absPath := filepath.Join(dirPath, f.Path)
-			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, peerKey, lim, compressed, compLevel)
+			var progressW io.Writer
+			if progressFn != nil {
+				progressW = &countWriter{fn: func(n int64) {
+					progressFn(sent.Add(n), totalSize)
+				}}
+			}
+			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, progressW, peerKey, lim, compressed, compLevel)
 		}(i, a)
 	}
 	wg.Wait()
@@ -290,7 +307,16 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	return nil
 }
 
-func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// countWriter は書き込みバイト数を fn に通知する io.Writer。
+// #317: progressFn への累積送信バイト通知に使用する。
+type countWriter struct{ fn func(int64) }
+
+func (cw *countWriter) Write(p []byte) (int, error) {
+	cw.fn(int64(len(p)))
+	return len(p), nil
+}
+
+func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, progressW io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
@@ -316,18 +342,25 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 		return err
 	}
 	src := NewThrottledReader(ctx, io.LimitReader(f, a.size), lim)
+
+	// #317: progressW が nil でない場合は bar と合わせてバイト数を通知する
+	teeTarget := io.Writer(bar)
+	if progressW != nil {
+		teeTarget = io.MultiWriter(bar, progressW)
+	}
+
 	if compressed {
 		enc, encErr := newZstdEncoder(ns, compLevel)
 		if encErr != nil {
 			return fmt.Errorf("chunk %d: %w", idx, encErr)
 		}
-		_, err = io.Copy(enc, io.TeeReader(src, bar))
+		_, err = io.Copy(enc, io.TeeReader(src, teeTarget))
 		if cerr := enc.Close(); cerr != nil && err == nil {
 			err = cerr
 		}
 		return err
 	}
-	_, err = io.CopyN(io.MultiWriter(ns, bar), src, a.size)
+	_, err = io.CopyN(io.MultiWriter(ns, teeTarget), src, a.size)
 	return err
 }
 
