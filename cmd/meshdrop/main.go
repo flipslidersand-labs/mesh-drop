@@ -313,6 +313,13 @@ func cmdSend() *cobra.Command {
 			if sendAll && sendTo != "" {
 				return fmt.Errorf("--all and --to are mutually exclusive")
 			}
+			// #372: --all/--to と --relay は同時使用不可（NAT モードは1ピア専用）
+			if relayURL != "" && (sendAll || sendTo != "") {
+				return fmt.Errorf("--all/--to cannot be used with --relay (NAT mode supports one peer at a time)")
+			}
+			if relayURL != "" && code == "" && !pipe {
+				return fmt.Errorf("--code is required with --relay")
+			}
 
 			// #160: Decode optional TLS certificate fingerprint.
 			fingerprint, err := parseFingerprint(fingerprintHex)
