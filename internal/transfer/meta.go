@@ -20,6 +20,7 @@ type Meta struct {
 	IsPipe     bool       `json:"is_pipe,omitempty"`
 	Compressed bool       `json:"compressed,omitempty"` // チャンクを zstd 圧縮する
 	CompLevel  int        `json:"comp_level,omitempty"` // 0=default(3), 1-9
+	NoResume   bool       `json:"no_resume,omitempty"`  // 送信側が resume を無効化 (#255)
 }
 
 // FileMeta はバッチ転送時の個別ファイル情報。

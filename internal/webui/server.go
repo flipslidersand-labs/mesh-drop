@@ -178,8 +178,14 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := r.ParseMultipartForm(512 << 20); err != nil {
-		http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
+	const maxSingleFileUpload = int64(512 << 20) // 512 MiB (#257)
+	r.Body = http.MaxBytesReader(w, r.Body, maxSingleFileUpload)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "request body too large") {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "parse form: "+err.Error(), status)
 		return
 	}
 	peerAddr := r.FormValue("peer")
@@ -251,7 +257,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		sendErr := transfer.Send(r.Context(), peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false)
+		sendErr := transfer.Send(s.runCtx, peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false)
 		close(done)
 
 		ev := ProgressEvent{
@@ -491,7 +497,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := filepath.Base(path)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	escaped := strings.ReplaceAll(name, `"`, `\"`)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, escaped))
 	http.ServeFile(w, r, path)
 }
 
