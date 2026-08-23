@@ -24,9 +24,15 @@ func TestServerTLSCertExpiry(t *testing.T) {
 	}
 }
 
-func TestServerTLSAndFingerprintCertExpiry(t *testing.T) {
-	_, _, err := serverTLSAndFingerprint()
+func TestServerTLSAndFingerprintRoundtrip(t *testing.T) {
+	cfg, fp, err := serverTLSAndFingerprint()
 	if err != nil {
 		t.Fatalf("serverTLSAndFingerprint() error: %v", err)
+	}
+	if len(fp) != 32 {
+		t.Errorf("fingerprint len=%d, want 32", len(fp))
+	}
+	if len(cfg.Certificates) == 0 {
+		t.Fatal("no certificates in TLS config")
 	}
 }
