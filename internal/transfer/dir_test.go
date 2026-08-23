@@ -149,6 +149,70 @@ func TestCheckDirDone_EmptyDir(t *testing.T) {
 	}
 }
 
+// TestDoReceiveDir_AllFilesDone verifies that doReceiveDir returns successfully
+// when all files are already marked done — no QUIC connection is needed because
+// expectedChunks is 0 and no streams are accepted.
+func TestDoReceiveDir_AllFilesDone(t *testing.T) {
+	outDir := t.TempDir()
+	meta := Meta{
+		Name:    "mydir",
+		Chunks:  1,
+		IsBatch: true,
+		Files:   []FileMeta{{Path: "a/b.txt", Size: 5, Hash: ""}},
+	}
+	if err := os.MkdirAll(filepath.Join(outDir, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "a", "b.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Mark all files done → expectedChunks=0 → conn is never used.
+	err := doReceiveDir(context.Background(), nil, meta, outDir, nil, []string{"a/b.txt"})
+	if err != nil {
+		t.Fatalf("doReceiveDir with all-done files: %v", err)
+	}
+}
+
+// TestDoReceiveDir_InvalidOutDir verifies that doReceiveDir returns an error
+// when the output directory is not writable.
+func TestDoReceiveDir_InvalidOutDir(t *testing.T) {
+	meta := Meta{
+		Name:    "x",
+		Chunks:  1,
+		IsBatch: true,
+		Files:   []FileMeta{{Path: "file.txt", Size: 0, Hash: ""}},
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skip("cannot set read-only dir")
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) }) //nolint:errcheck
+	err := doReceiveDir(context.Background(), nil, meta, dir, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when outDir is not writable")
+	}
+}
+
+func TestWalkDir_SkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+	files, err := WalkDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file (symlink skipped), got %d: %v", len(files), files)
+	}
+	if files[0].Path != "real.txt" {
+		t.Errorf("expected real.txt, got %q", files[0].Path)
+	}
+}
+
 func TestResumeState_DirDone_JSON(t *testing.T) {
 	rs := ResumeState{
 		DirDone: []string{"a/b.txt", "c.txt"},
