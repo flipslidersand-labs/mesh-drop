@@ -130,7 +130,9 @@ func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	go func() {
 		<-ctx.Done()
-		srv.Shutdown(context.Background()) //nolint:errcheck
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
 	}()
 	return srv.ListenAndServe()
 }
