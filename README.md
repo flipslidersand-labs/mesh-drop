@@ -41,6 +41,19 @@ curl -L https://github.com/flipslidersand/mesh-drop/releases/latest/download/mes
 go install github.com/flipslidersand/mesh-drop/cmd/meshdrop@latest
 ```
 
+## Verify a release
+
+Each release includes `checksums.txt` with SHA-256 hashes for all binaries.
+
+```bash
+# Download binary and checksums
+curl -LO https://github.com/flipslidersand/mesh-drop/releases/latest/download/meshdrop-linux-amd64.tar.gz
+curl -LO https://github.com/flipslidersand/mesh-drop/releases/latest/download/checksums.txt
+
+# Verify checksum
+sha256sum --check --ignore-missing checksums.txt
+```
+
 ## Usage
 
 ### LAN (same network — zero config)
