@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -111,22 +112,26 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
 // noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
 func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	t0 := time.Now()
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
+	t1 := time.Now()
+	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
 func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	t0 := time.Now()
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
-	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
+	t1 := time.Now()
+	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
 // --- accept & dispatch ---
@@ -272,7 +277,10 @@ func checkDirDone(outDir string, files []FileMeta) []string {
 
 // --- single file send ---
 
-func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+// doSend はファイルを conn 経由で送信する。
+// t0: QUIC dial 呼び出し前、t1: QUIC 接続確立後の時刻。
+// Noise XX ハンドシェイク完了後の t2 は内部で計測し、debug ログに出力する。
+func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
 	defer conn.CloseWithError(0, "done")
 
 	if nChunks < 1 {
@@ -318,6 +326,13 @@ func doSend(ctx context.Context, conn *quic.Conn, filePath string, nChunks int, 
 		CompLevel:  compLevel,
 	}
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
+	t2 := time.Now()
+	// #273: QUIC dial + Noise XX ハンドシェイク時間を debug レベルでログ出力する。
+	slog.Debug("connection setup",
+		"quic_dial_ms", t1.Sub(t0).Milliseconds(),
+		"noise_xx_ms", t2.Sub(t1).Milliseconds(),
+		"total_ms", t2.Sub(t0).Milliseconds(),
+	)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
