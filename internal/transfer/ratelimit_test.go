@@ -50,3 +50,30 @@ func TestParseRateLimit_Invalid(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRateLimit_AllSuffixes(t *testing.T) {
+	// Exercise all suffix branches not covered by the main Valid test.
+	cases := []struct {
+		input string
+		want  int64
+	}{
+		{"1GIB/s", 1 << 30},
+		{"1GB/s", 1 << 30},
+		{"1KIB/s", 1 << 10},
+		{"1KB/s", 1 << 10},
+		{"1G/s", 1 << 30},
+		{"1G", 1 << 30},
+		{"1Kbps", 1 << 10},  // "ps" suffix stripped
+		{"1MBps", 1 << 20},  // "ps" suffix stripped
+	}
+	for _, c := range cases {
+		lim, err := ParseRateLimit(c.input)
+		if err != nil {
+			t.Errorf("%q: unexpected error: %v", c.input, err)
+			continue
+		}
+		if lim == nil {
+			t.Errorf("%q: got nil limiter", c.input)
+		}
+	}
+}

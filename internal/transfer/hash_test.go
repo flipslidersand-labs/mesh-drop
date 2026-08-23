@@ -2,6 +2,8 @@ package transfer
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,4 +41,76 @@ func TestErrHashMismatch_IsWrappable(t *testing.T) {
 		t.Fatal("ErrHashMismatch is nil")
 	}
 	_ = wrapped
+}
+
+func TestHashFileAt_MatchesHashReader(t *testing.T) {
+	content := []byte("hello from hashFileAt test content 1234567890")
+	f, err := os.CreateTemp(t.TempDir(), "hash*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+
+	hAt, err := hashFileAt(f, int64(len(content)))
+	if err != nil {
+		t.Fatalf("hashFileAt: %v", err)
+	}
+	hReader, err := hashReader(strings.NewReader(string(content)))
+	if err != nil {
+		t.Fatalf("hashReader: %v", err)
+	}
+	if hAt != hReader {
+		t.Errorf("hashFileAt = %q, want %q", hAt, hReader)
+	}
+}
+
+func TestHashFileAt_ZeroSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.bin")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	h, err := hashFileAt(f, 0)
+	if err != nil {
+		t.Fatalf("hashFileAt(0): %v", err)
+	}
+	if len(h) != 64 {
+		t.Errorf("expected 64-char hex hash, got %q", h)
+	}
+}
+
+func TestHashFileAt_LargeFile(t *testing.T) {
+	// Write 3 MiB to exercise the multi-chunk read path (bufSize = 1 MiB).
+	content := make([]byte, 3<<20)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "large*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+
+	hAt, err := hashFileAt(f, int64(len(content)))
+	if err != nil {
+		t.Fatalf("hashFileAt: %v", err)
+	}
+	hReader, err := hashReader(strings.NewReader(string(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hAt != hReader {
+		t.Errorf("hashFileAt large mismatch")
+	}
 }
