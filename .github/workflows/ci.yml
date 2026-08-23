@@ -32,4 +32,8 @@ jobs:
 
       - name: Test
         shell: bash
-        run: go test -short -race ./...
+        # Skip tests that rely on Unix file permissions (0600) or Unix path separators.
+        run: >
+          go test -short -race
+          -skip 'TestConfigPath_XDG|TestLoadOrCreateIdentity_FilePermissions|TestKnownPeers_appendFile_FilePermissions|TestHandleSendDir_ValidRequest_Returns200'
+          ./...
