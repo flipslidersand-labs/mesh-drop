@@ -68,11 +68,34 @@ func main() {
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging to stderr")
-	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI(), cmdConfig())
+	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI(), cmdConfig(), cmdVersion())
 	root.InitDefaultCompletionCmd()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// cmdVersion returns the "version" subcommand.
+func cmdVersion() *cobra.Command {
+	var short bool
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if short || version == "" {
+				v := version
+				if v == "" {
+					v = "dev"
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), v)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "meshdrop %s\n", version)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&short, "short", false, "print version number only")
+	return cmd
 }
 
 // cmdConfig returns the "config" parent command with subcommands.
