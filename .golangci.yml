@@ -15,6 +15,7 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - fmt.Fprint
+        - fmt.Printf
         # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
         - (*net.UDPConn).Close
         - (net.Conn).Close
