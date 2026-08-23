@@ -32,6 +32,19 @@ func ConfigPath() string {
 	return filepath.Join(home, ".meshdrop", "config.yaml")
 }
 
+// DataPath returns the resolved path for a data file in the meshdrop data dir.
+// Precedence: $XDG_DATA_HOME/meshdrop/<name> > ~/.meshdrop/<name>
+func DataPath(name string) string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "meshdrop", name)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".meshdrop", name)
+}
+
 // Load reads the config file from ConfigPath().
 // If the file does not exist, a zero-value Config is returned with no error.
 // If the file exists but contains invalid YAML, an error is returned.

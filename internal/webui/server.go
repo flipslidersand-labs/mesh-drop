@@ -136,6 +136,7 @@ func (h *hub) publish(e ProgressEvent) {
 // Server is the meshdrop Web UI HTTP server.
 type Server struct {
 	AuthToken string // optional Bearer token; if set, all requests must authenticate
+	HistPath  string // path to history.json for persistence; empty = in-memory only
 
 	addr    string
 	timeout time.Duration
@@ -160,8 +161,57 @@ func New(addr string, discoverTimeout time.Duration) *Server {
 	}
 }
 
+// loadHistory reads persisted history from HistPath into s.history.
+// Errors are silently ignored — the server starts with empty history on failure.
+func (s *Server) loadHistory() {
+	if s.HistPath == "" {
+		return
+	}
+	data, err := os.ReadFile(s.HistPath)
+	if err != nil {
+		return
+	}
+	var h []HistoryEntry
+	if err := json.Unmarshal(data, &h); err != nil {
+		return
+	}
+	s.histMu.Lock()
+	s.history = h
+	s.histMu.Unlock()
+}
+
+// appendHistory adds entry to in-memory history and persists to disk (best-effort).
+func (s *Server) appendHistory(entry HistoryEntry) {
+	s.histMu.Lock()
+	s.history = append(s.history, entry)
+	snapshot := make([]HistoryEntry, len(s.history))
+	copy(snapshot, s.history)
+	s.histMu.Unlock()
+
+	if s.HistPath != "" {
+		_ = s.saveHistory(snapshot)
+	}
+}
+
+// saveHistory atomically writes history to HistPath via a temp file + rename.
+func (s *Server) saveHistory(h []HistoryEntry) error {
+	if err := os.MkdirAll(filepath.Dir(s.HistPath), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	tmp := s.HistPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.HistPath)
+}
+
 func (s *Server) Run(ctx context.Context) error {
 	s.runCtx = ctx
+	s.loadHistory()
 	// Create persistent recv dir for the session.
 	recvDir, err := os.MkdirTemp("", "meshdrop-ui-recv-*")
 	if err != nil {
@@ -347,9 +397,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		if sendErr != nil {
 			entry.ErrMsg = sendErr.Error()
 		}
-		s.histMu.Lock()
-		s.history = append(s.history, entry)
-		s.histMu.Unlock()
+		s.appendHistory(entry)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -524,9 +572,7 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 		if sendErr != nil {
 			entry.ErrMsg = sendErr.Error()
 		}
-		s.histMu.Lock()
-		s.history = append(s.history, entry)
-		s.histMu.Unlock()
+		s.appendHistory(entry)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -627,13 +673,11 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 			File: name, Peer: peer,
 			Sent: size, Total: size, Done: true,
 		})
-		s.histMu.Lock()
-		s.history = append(s.history, HistoryEntry{
+		s.appendHistory(HistoryEntry{
 			ID: id, Direction: "recv",
 			File: name, Peer: peer,
 			Size: size, At: time.Now(),
 		})
-		s.histMu.Unlock()
 	})
 }
 
