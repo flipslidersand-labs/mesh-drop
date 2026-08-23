@@ -232,7 +232,21 @@ func (s *RelayServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/session", s.handleCreate)
 	mux.HandleFunc("/session/", s.handleJoin)
+	mux.HandleFunc("/health", s.handleHealth)
 	return mux
+}
+
+func (s *RelayServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	sessions := len(s.sessions)
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sessions": sessions}) //nolint:errcheck
 }
 
 // Start は addr でリレーサーバーを起動する (ブロッキング)。
