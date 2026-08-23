@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/flipslidersand/mesh-drop/internal/discovery"
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
+	"golang.org/x/time/rate"
 )
 
 //go:embed static
@@ -79,6 +81,57 @@ func (h *hub) publish(e ProgressEvent) {
 	}
 }
 
+// rateLimiter manages per-IP token-bucket limiters.
+type rateLimiter struct {
+	mu       sync.Mutex
+	visitors map[string]*rate.Limiter
+}
+
+func newRateLimiter() *rateLimiter {
+	rl := &rateLimiter{visitors: make(map[string]*rate.Limiter)}
+	go rl.evict()
+	return rl
+}
+
+// getVisitor returns (creating if necessary) a Limiter for the given IP.
+// Configured at 30 req/min (one token every 2 s) with a burst of 10.
+func (rl *rateLimiter) getVisitor(ip string) *rate.Limiter {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if lim, ok := rl.visitors[ip]; ok {
+		return lim
+	}
+	lim := rate.NewLimiter(rate.Every(2*time.Second), 10)
+	rl.visitors[ip] = lim
+	return lim
+}
+
+// evict clears all visitor entries every minute to prevent unbounded growth.
+func (rl *rateLimiter) evict() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for range t.C {
+		rl.mu.Lock()
+		rl.visitors = make(map[string]*rate.Limiter)
+		rl.mu.Unlock()
+	}
+}
+
+// middleware returns an http.Handler that enforces per-IP rate limits.
+func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		if !rl.getVisitor(ip).Allow() {
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Server is the meshdrop Web UI HTTP server.
 type Server struct {
 	AuthToken string // optional Bearer token; if set, all requests must authenticate
@@ -118,16 +171,18 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go s.runReceiver(ctx, recvDir)
 
+	rl := newRateLimiter()
+
 	mux := http.NewServeMux()
 
 	sub, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
-	mux.HandleFunc("/api/peers", s.handlePeers)
-	mux.HandleFunc("/api/send", s.handleSend)
-	mux.HandleFunc("/api/send-dir", s.handleSendDir)
-	mux.HandleFunc("/api/history", s.handleHistory)
-	mux.HandleFunc("/api/downloads/", s.handleDownload)
-	mux.HandleFunc("/sse/progress", s.handleSSE)
+	mux.Handle("/api/peers", rl.middleware(http.HandlerFunc(s.handlePeers)))
+	mux.Handle("/api/send", rl.middleware(http.HandlerFunc(s.handleSend)))
+	mux.Handle("/api/send-dir", rl.middleware(http.HandlerFunc(s.handleSendDir)))
+	mux.Handle("/api/history", rl.middleware(http.HandlerFunc(s.handleHistory)))
+	mux.Handle("/api/downloads/", rl.middleware(http.HandlerFunc(s.handleDownload)))
+	mux.Handle("/sse/progress", rl.middleware(http.HandlerFunc(s.handleSSE)))
 
 	srv := &http.Server{Addr: s.addr, Handler: authMiddleware(s.AuthToken, secureHeaders(mux))}
 	go func() {
