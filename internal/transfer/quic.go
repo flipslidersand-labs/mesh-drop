@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -111,10 +112,12 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // Pass nil to fall back to the self-signed-only check (weaker, but better than nothing).
 // noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
 func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	t0 := time.Now()
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
+	slog.Debug("QUIC dial", "addr", addr, "elapsed", time.Since(t0).Round(time.Millisecond)) // #273
 	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
@@ -122,10 +125,12 @@ func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint [
 // #160: fingerprint is the SHA-256 of the receiver's TLS certificate DER.
 // noResume=true のとき受信側から返る ChunksDone を無視してフル再送する (#244)。
 func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	t0 := time.Now()
 	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
+	slog.Debug("QUIC dial NAT", "peer", peerAddr, "elapsed", time.Since(t0).Round(time.Millisecond)) // #273
 	return doSend(ctx, conn, filePath, nChunks, lim, compressed, compLevel, noResume)
 }
 
@@ -407,10 +412,12 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 	}
 	defer stream.Close()
 
+	tNoise := time.Now()
 	ns, peerKey, err := controlHandshakeInitiator(stream)
 	if err != nil {
 		return ResumeState{}, nil, err
 	}
+	slog.Debug("Noise XX handshake", "elapsed", time.Since(tNoise).Round(time.Millisecond)) // #273
 
 	if err := writeMeta(ns, meta); err != nil {
 		return ResumeState{}, nil, err
