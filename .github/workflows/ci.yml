@@ -35,5 +35,5 @@ jobs:
         # Skip tests that rely on Unix file permissions (0600) or Unix path separators.
         run: >
           go test -short -race
-          -skip 'TestConfigPath_XDG|TestLoadOrCreateIdentity_FilePermissions|TestKnownPeers_appendFile_FilePermissions|TestHandleSendDir_ValidRequest_Returns200'
+          -skip 'TestConfigPath_XDG|TestDataPath_XDG|TestLoadOrCreateIdentity_FilePermissions|TestKnownPeers_appendFile_FilePermissions|TestHandleSendDir_ValidRequest_Returns200'
           ./...
