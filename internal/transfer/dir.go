@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -42,13 +43,22 @@ func WalkDir(dirPath string) ([]FileMeta, error) {
 	base := filepath.Clean(dirPath)
 
 	// Phase 1: collect entries sequentially (filesystem metadata only, no I/O).
+	// filepath.WalkDir を使いシンボリックリンクは再帰せずスキップする (#352)。
 	var entries []walkEntry
-	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
+		}
+		// シンボリックリンクをスキップ（意図しないファイル転送・パストラバーサル補助を防ぐ）
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
 		rel, err := filepath.Rel(base, path)
 		if err != nil {
