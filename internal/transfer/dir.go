@@ -12,12 +12,39 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
+
+// chunkSkewThreshold is the max:avg ratio above which chunk distribution is considered skewed (#274).
+const chunkSkewThreshold = 3.0
+
+// warnChunkSkew prints a warning to stderr if chunks are distributed very unevenly across files.
+func warnChunkSkew(files []FileMeta, assignments []chunkAssignment) {
+	if len(files) < 2 {
+		return
+	}
+	counts := make([]int, len(files))
+	for _, a := range assignments {
+		counts[a.fileIndex]++
+	}
+	maxCount := 0
+	var total int
+	for _, c := range counts {
+		total += c
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	avg := float64(total) / float64(len(files))
+	if avg > 0 && float64(maxCount)/avg >= chunkSkewThreshold {
+		fmt.Fprintf(os.Stderr, "[WARN] chunk distribution skewed: max=%d avg=%.1f\n", maxCount, avg)
+	}
+}
 
 type fileHandle struct {
 	f       *os.File
@@ -215,6 +242,7 @@ func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr
 // #317: progressFn は転送済みバイト数の更新を通知するコールバック。nil の場合は呼ばれない。
 func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	defer conn.CloseWithError(0, "done")
+	start := time.Now() // #269
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
 	files, err := WalkDir(ctx, dirPath)
@@ -246,6 +274,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 
 	assignments := assignChunks(files, nChunks)
 	totalSize := totalDirSize(files)
+	warnChunkSkew(files, assignments) // #274
 
 	meta := Meta{
 		Name:       filepath.Base(dirPath),
@@ -273,7 +302,19 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		doneFiles[p] = struct{}{}
 	}
 	if len(doneFiles) > 0 {
-		fmt.Printf("  Resume: skipping %d/%d completed file(s)\n", len(doneFiles), len(files))
+		// #270: report skipped files and chunks
+		skippedChunks := 0
+		for _, a := range assignments {
+			if _, done := doneFiles[files[a.fileIndex].Path]; done {
+				skippedChunks++
+			}
+		}
+		pct := 0.0
+		if len(assignments) > 0 {
+			pct = float64(skippedChunks) / float64(len(assignments)) * 100
+		}
+		fmt.Printf("  Resume: skipping %d/%d file(s), %d chunks (%.0f%%)\n",
+			len(doneFiles), len(files), skippedChunks, pct)
 	}
 
 	bar := progressbar.DefaultBytes(totalSize, "sending  ")
@@ -315,13 +356,26 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	wg.Wait()
 	fmt.Println()
 
+	// #275: categorize and summarize errors before returning
+	ec := newErrCounter()
+	for _, e := range errs {
+		ec.Add(e)
+	}
+	if s := ec.Summary(); s != "" {
+		fmt.Fprintln(os.Stderr, s)
+	}
 	for _, e := range errs {
 		if e != nil {
 			return e
 		}
 	}
+
+	// #269: report elapsed time and throughput
+	elapsed := time.Since(start)
+	mbps := float64(totalSize) / elapsed.Seconds() / (1 << 20)
 	fmt.Printf("✓ Sent: %s (%d files, %d bytes, %d chunks)\n",
 		filepath.Base(dirPath), len(files), totalSize, len(assignments))
+	fmt.Printf("  Elapsed: %s  Throughput: %.2f MB/s\n", elapsed.Round(time.Millisecond), mbps)
 	return nil
 }
 
@@ -389,6 +443,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	if conn != nil {
 		defer conn.CloseWithError(0, "done")
 	}
+	start := time.Now() // #269
 
 	// 完了済みファイルセット (#245)
 	doneSet := make(map[string]struct{}, len(dirDone))
@@ -400,7 +455,20 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
 		meta.Name, len(meta.Files), totalSize, meta.Chunks)
 	if len(doneSet) > 0 {
-		fmt.Printf("  Resume: %d/%d file(s) already complete, skipping\n", len(doneSet), len(meta.Files))
+		// #270: report skipped files and chunks with percentage
+		skippedChunks := 0
+		allAssignments := assignChunks(meta.Files, meta.Chunks)
+		for _, a := range allAssignments {
+			if _, done := doneSet[meta.Files[a.fileIndex].Path]; done {
+				skippedChunks++
+			}
+		}
+		pct := 0.0
+		if meta.Chunks > 0 {
+			pct = float64(skippedChunks) / float64(meta.Chunks) * 100
+		}
+		fmt.Printf("  Resume: %d/%d file(s) already complete, skipping %d chunks (%.0f%%)\n",
+			len(doneSet), len(meta.Files), skippedChunks, pct)
 	}
 
 	// outDir を絶対パスに確定してパストラバーサル検証の基準にする。
@@ -497,10 +565,20 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 	}
 
+	// #275: categorize chunk errors before returning
+	ec := newErrCounter()
+	var firstErr error
 	for e := range errCh {
-		if e != nil {
-			return e
+		ec.Add(e)
+		if e != nil && firstErr == nil {
+			firstErr = e
 		}
+	}
+	if s := ec.Summary(); s != "" {
+		fmt.Fprintln(os.Stderr, s)
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 
 	// ハッシュ検証（完了済みファイルは acceptMetaDispatch で検証済みなのでスキップ）
@@ -527,8 +605,12 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 	}
 
+	// #269: report elapsed time and throughput
+	elapsed := time.Since(start)
+	mbps := float64(totalSize) / elapsed.Seconds() / (1 << 20)
 	fmt.Printf("✓ Hash OK  (%d files)\n", len(meta.Files))
 	fmt.Printf("✓ Saved: %s/ (%d files, %d bytes)\n", outDir, len(meta.Files), totalSize)
+	fmt.Printf("  Elapsed: %s  Throughput: %.2f MB/s\n", elapsed.Round(time.Millisecond), mbps)
 	return nil
 }
 
