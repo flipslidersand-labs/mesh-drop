@@ -81,6 +81,8 @@ func (h *hub) publish(e ProgressEvent) {
 
 // Server is the meshdrop Web UI HTTP server.
 type Server struct {
+	AuthToken string // optional Bearer token; if set, all requests must authenticate
+
 	addr    string
 	timeout time.Duration
 	hub     *hub
@@ -127,7 +129,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/downloads/", s.handleDownload)
 	mux.HandleFunc("/sse/progress", s.handleSSE)
 
-	srv := &http.Server{Addr: s.addr, Handler: mux}
+	srv := &http.Server{Addr: s.addr, Handler: authMiddleware(s.AuthToken, secureHeaders(mux))}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -506,6 +508,37 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	escaped := strings.ReplaceAll(name, `"`, `\"`)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, escaped))
 	http.ServeFile(w, r, path)
+}
+
+// authMiddleware enforces optional Bearer-token authentication.
+// When token is empty the middleware is a no-op (backward-compatible).
+// Clients may supply the token via the Authorization header ("Bearer <token>")
+// or via the "token" query parameter.
+func authMiddleware(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next // no auth configured — pass through
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		query := r.URL.Query().Get("token")
+		if bearer != token && query != token {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="meshdrop"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// secureHeaders sets security-related HTTP response headers on every response.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // runReceiver starts a QUIC listener that accepts incoming transfers in a loop.
