@@ -310,3 +310,69 @@ func TestReadMeta_MaxValidSize(t *testing.T) {
 		t.Errorf("Size=maxFileSize should be accepted: %v", err)
 	}
 }
+
+// TestSanitizeName_RejectsControlChars verifies null bytes and ASCII/Unicode
+// control characters are rejected.
+func TestSanitizeName_RejectsControlChars(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"null byte", "file\x00.txt"},
+		{"SOH", "file\x01.txt"},
+		{"tab", "file\t.txt"},
+		{"newline", "file\n.txt"},
+		{"carriage return", "file\r.txt"},
+		{"US (unit separator)", "file\x1f.txt"},
+		{"DEL", "file\x7f.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sanitizeName(tc.input); err == nil {
+				t.Errorf("sanitizeName(%q) = nil, want error", tc.input)
+			}
+		})
+	}
+}
+
+// TestSanitizeName_AcceptsValidNames verifies normal filenames are accepted.
+func TestSanitizeName_AcceptsValidNames(t *testing.T) {
+	cases := []string{
+		"file.txt",
+		"résumé.pdf",
+		"日本語.txt",
+		"file name with spaces.zip",
+		"file-name_with.punctuation (1).tar.gz",
+	}
+	for _, name := range cases {
+		if err := sanitizeName(name); err != nil {
+			t.Errorf("sanitizeName(%q) = %v, want nil", name, err)
+		}
+	}
+}
+
+// TestReadMeta_NullByteInName verifies that readMeta rejects a name with a null byte.
+func TestReadMeta_NullByteInName(t *testing.T) {
+	m := Meta{Name: "bad\x00file.txt", Size: 1, Chunks: 1}
+	raw, err := writeRawMeta(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readMeta(bytes.NewReader(raw))
+	if err == nil {
+		t.Error("expected error for name with null byte, got nil")
+	}
+}
+
+// TestReadMeta_ControlCharInName verifies that readMeta rejects a name with a control char.
+func TestReadMeta_ControlCharInName(t *testing.T) {
+	m := Meta{Name: "bad\x1bfile.txt", Size: 1, Chunks: 1}
+	raw, err := writeRawMeta(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readMeta(bytes.NewReader(raw))
+	if err == nil {
+		t.Error("expected error for name with control character, got nil")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode"
 )
 
 // Meta はコントロールストリームで送信するファイル全体情報。
@@ -125,6 +126,17 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 	return m, json.Unmarshal(buf, &m)
 }
 
+// sanitizeName rejects filenames containing null bytes or ASCII/Unicode control
+// characters that could corrupt terminals, logs, or filesystem operations.
+func sanitizeName(name string) error {
+	for _, r := range name {
+		if r == 0 || unicode.IsControl(r) {
+			return fmt.Errorf("file name contains invalid character %q", r)
+		}
+	}
+	return nil
+}
+
 func readMeta(r io.Reader) (Meta, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -139,6 +151,9 @@ func readMeta(r io.Reader) (Meta, error) {
 	}
 	var m Meta
 	if err := json.Unmarshal(buf, &m); err != nil {
+		return Meta{}, err
+	}
+	if err := sanitizeName(m.Name); err != nil {
 		return Meta{}, err
 	}
 	if !m.IsPipe {
