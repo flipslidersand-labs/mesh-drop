@@ -85,13 +85,10 @@ func TestRelayMaxSessionsExhaustion(t *testing.T) {
 	defer ts.Close()
 
 	// Fill all slots.
-	codes := make([]string, 0, cap)
 	for i := 0; i < cap; i++ {
-		code, err := CreateSession(ts.URL)
-		if err != nil {
+		if _, err := CreateSession(ts.URL); err != nil {
 			t.Fatalf("slot %d: unexpected error: %v", i, err)
 		}
-		codes = append(codes, code)
 	}
 
 	// Next create must be rejected with 503.
