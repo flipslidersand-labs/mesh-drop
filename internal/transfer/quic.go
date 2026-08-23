@@ -441,6 +441,11 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 		}
 		var appErr *quic.ApplicationError
 		if errors.As(err, &appErr) {
+			// Code 0 is a normal "done" close (e.g. zero-byte file: receiver finishes
+			// before sender reads ResumeState). Treat it like EOF for compatibility.
+			if appErr.ErrorCode == 0 {
+				return ResumeState{}, peerKey, nil
+			}
 			return ResumeState{}, nil, fmt.Errorf("peer rejected connection (code %d): %s", appErr.ErrorCode, appErr.ErrorMessage)
 		}
 		return ResumeState{}, nil, fmt.Errorf("reading resume state: %w", err)
@@ -479,7 +484,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 
 	outPath := filepath.Join(outDir, filepath.Base(meta.Name))
-	if err := sanitizeName(outPath); err != nil {
+	if err := sanitizeName(filepath.Base(meta.Name)); err != nil {
 		return fmt.Errorf("invalid file name in metadata: %w", err)
 	}
 	tmpPath := outPath + ".meshdrop.tmp"
