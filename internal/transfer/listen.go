@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,12 @@ func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDi
 			return err
 		}
 		go func() {
-			_ = dispatchConnToDir(ctx, conn, outDir, conn.RemoteAddr().String(), cb)
+			peerAddr := conn.RemoteAddr().String()
+			if err := dispatchConnToDir(ctx, conn, outDir, peerAddr, cb); err != nil {
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					fmt.Fprintf(os.Stderr, "receive from %s: %v\n", peerAddr, err)
+				}
+			}
 		}()
 	}
 }
