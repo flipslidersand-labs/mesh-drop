@@ -85,6 +85,38 @@ func isInsideDir(absOut, absBase string) bool {
 		absOut[len(absBase)] == os.PathSeparator
 }
 
+func TestWalkDir_CancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 5 {
+		if err := os.WriteFile(filepath.Join(dir, string(rune('a'+i))+".txt"), []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before calling
+
+	_, err := WalkDir(ctx, dir)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+}
+
+func TestWalkDir_NormalDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := WalkDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "hello.txt" {
+		t.Fatalf("unexpected files: %v", files)
+	}
+}
+
 func TestCheckDirDone_HashMatch(t *testing.T) {
 	dir := t.TempDir()
 
