@@ -188,6 +188,30 @@ func TestHandleHistory_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestSecureHeaders(t *testing.T) {
+	handler := secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"X-Frame-Options", "DENY"},
+		{"X-Content-Type-Options", "nosniff"},
+		{"Referrer-Policy", "no-referrer"},
+		{"Content-Security-Policy", "default-src 'self'"},
+	}
+	for _, tt := range tests {
+		if got := rr.Header().Get(tt.header); got != tt.want {
+			t.Errorf("header %q = %q, want %q", tt.header, got, tt.want)
+		}
+	}
+}
+
 func TestHandlePeers_ReturnsJSON(t *testing.T) {
 	s := New("127.0.0.1:0", 50*time.Millisecond)
 	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)

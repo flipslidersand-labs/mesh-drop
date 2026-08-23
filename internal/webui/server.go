@@ -127,7 +127,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/downloads/", s.handleDownload)
 	mux.HandleFunc("/sse/progress", s.handleSSE)
 
-	srv := &http.Server{Addr: s.addr, Handler: mux}
+	srv := &http.Server{Addr: s.addr, Handler: secureHeaders(mux)}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -506,6 +506,18 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	escaped := strings.ReplaceAll(name, `"`, `\"`)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, escaped))
 	http.ServeFile(w, r, path)
+}
+
+// secureHeaders is a middleware that sets security-related HTTP response headers
+// on every response, including SSE endpoints.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // runReceiver starts a QUIC listener that accepts incoming transfers in a loop.
