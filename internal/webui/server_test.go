@@ -503,6 +503,79 @@ func TestHandleDownload_FilenameWithQuotes_Escaped(t *testing.T) {
 	}
 }
 
+// TestProgressEvent_SpeedFields verifies that ElapsedMs and SpeedBps are
+// correctly JSON-encoded and propagated through the hub.
+func TestProgressEvent_SpeedFields(t *testing.T) {
+	// Verify JSON encoding includes the new fields when non-zero.
+	ev := ProgressEvent{
+		ID:        "test-1",
+		Direction: "send",
+		File:      "big.bin",
+		Peer:      "127.0.0.1:9999",
+		Sent:      1024,
+		Total:     2048,
+		ElapsedMs: 1000,
+		SpeedBps:  1024,
+		EtaMs:     1000,
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+	for _, field := range []string{"elapsed_ms", "speed_bps", "eta_ms"} {
+		if _, ok := m[field]; !ok {
+			t.Errorf("field %q missing from JSON output: %s", field, string(data))
+		}
+	}
+	if got := m["elapsed_ms"].(float64); got != 1000 {
+		t.Errorf("elapsed_ms = %v, want 1000", got)
+	}
+	if got := m["speed_bps"].(float64); got != 1024 {
+		t.Errorf("speed_bps = %v, want 1024", got)
+	}
+	if got := m["eta_ms"].(float64); got != 1000 {
+		t.Errorf("eta_ms = %v, want 1000", got)
+	}
+
+	// Verify omitempty: zero-value fields should be absent from JSON.
+	evZero := ProgressEvent{ID: "test-2", Direction: "send", File: "a.txt", Peer: "p"}
+	dataZero, err := json.Marshal(evZero)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	var mZero map[string]interface{}
+	if err := json.Unmarshal(dataZero, &mZero); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+	for _, field := range []string{"elapsed_ms", "speed_bps", "eta_ms"} {
+		if _, ok := mZero[field]; ok {
+			t.Errorf("field %q should be omitted when zero, but present in JSON: %s", field, string(dataZero))
+		}
+	}
+
+	// Verify hub pub/sub correctly carries the new fields.
+	h := newHub()
+	ch := h.subscribe()
+	defer h.unsubscribe(ch)
+
+	h.publish(ProgressEvent{ID: "hub-1", ElapsedMs: 1000, SpeedBps: 1024})
+	select {
+	case got := <-ch:
+		if got.ElapsedMs != 1000 {
+			t.Errorf("ElapsedMs = %d, want 1000", got.ElapsedMs)
+		}
+		if got.SpeedBps != 1024 {
+			t.Errorf("SpeedBps = %d, want 1024", got.SpeedBps)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for hub event")
+	}
+}
+
 // TestWebUIRateLimit verifies that the per-IP rate limiter returns 429 after
 // the burst limit (10) is exhausted.
 func TestWebUIRateLimit(t *testing.T) {

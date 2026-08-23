@@ -86,6 +86,9 @@ type ProgressEvent struct {
 	Total     int64  `json:"total,omitempty"`
 	Done      bool   `json:"done"`
 	ErrMsg    string `json:"error,omitempty"`
+	ElapsedMs int64  `json:"elapsed_ms,omitempty"`
+	SpeedBps  int64  `json:"speed_bps,omitempty"`
+	EtaMs     int64  `json:"eta_ms,omitempty"`
 }
 
 // HistoryEntry records a completed transfer.
@@ -353,6 +356,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer os.Remove(tmp.Name())
 
+		start := time.Now()
+
 		// Publish heartbeat progress events while sending (#238).
 		done := make(chan struct{})
 		go func() {
@@ -369,10 +374,21 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 					if pct < total*9/10 {
 						pct += total / 20
 					}
+					elapsed := time.Since(start)
+					elapsedMs := elapsed.Milliseconds()
+					speedBps := int64(0)
+					if elapsed.Seconds() > 0 {
+						speedBps = int64(float64(pct) / elapsed.Seconds())
+					}
+					etaMs := int64(0)
+					if speedBps > 0 && total > pct {
+						etaMs = int64(float64(total-pct) / float64(speedBps) * 1000)
+					}
 					s.hub.publish(ProgressEvent{
 						ID: id, Direction: "send",
 						File: header.Filename, Peer: peerAddr,
 						Sent: pct, Total: total,
+						ElapsedMs: elapsedMs, SpeedBps: speedBps, EtaMs: etaMs,
 					})
 				}
 			}
@@ -381,10 +397,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		sendErr := transfer.Send(s.runCtx, peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false)
 		close(done)
 
+		elapsed := time.Since(start)
+		elapsedMs := elapsed.Milliseconds()
+		finalSpeedBps := int64(0)
+		if elapsed.Seconds() > 0 {
+			finalSpeedBps = int64(float64(total) / elapsed.Seconds())
+		}
+
 		ev := ProgressEvent{
 			ID: id, Direction: "send",
 			File: header.Filename, Peer: peerAddr,
 			Sent: total, Total: total, Done: true,
+			ElapsedMs: elapsedMs, SpeedBps: finalSpeedBps,
 		}
 		if sendErr != nil {
 			ev.ErrMsg = sendErr.Error()
@@ -531,21 +555,42 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer os.RemoveAll(tmpDir)
 
+		start := time.Now()
+
 		// #319: 擬似タイマーを削除し、progressFn で実転送バイト数を配信する。
 		progressFn := func(sent, tot int64) {
+			elapsed := time.Since(start)
+			elapsedMs := elapsed.Milliseconds()
+			speedBps := int64(0)
+			if elapsed.Seconds() > 0 {
+				speedBps = int64(float64(sent) / elapsed.Seconds())
+			}
+			etaMs := int64(0)
+			if speedBps > 0 && tot > sent {
+				etaMs = int64(float64(tot-sent) / float64(speedBps) * 1000)
+			}
 			s.hub.publish(ProgressEvent{
 				ID: id, Direction: "send",
 				File: dirName, Peer: peerAddr,
 				Sent: sent, Total: tot,
+				ElapsedMs: elapsedMs, SpeedBps: speedBps, EtaMs: etaMs,
 			})
 		}
 
 		sendErr := transfer.SendDir(s.runCtx, peerAddr, sendPath, 4, nil, lim, compress, compLevel, false, progressFn)
 
+		elapsed := time.Since(start)
+		elapsedMs := elapsed.Milliseconds()
+		finalSpeedBps := int64(0)
+		if elapsed.Seconds() > 0 {
+			finalSpeedBps = int64(float64(total) / elapsed.Seconds())
+		}
+
 		ev := ProgressEvent{
 			ID: id, Direction: "send",
 			File: dirName, Peer: peerAddr,
 			Sent: total, Total: total, Done: true,
+			ElapsedMs: elapsedMs, SpeedBps: finalSpeedBps,
 		}
 		if sendErr != nil {
 			ev.ErrMsg = sendErr.Error()
