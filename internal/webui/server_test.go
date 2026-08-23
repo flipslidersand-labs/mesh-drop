@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +318,139 @@ func TestSecureHeaders(t *testing.T) {
 		if got := rr.Header().Get(tt.header); got != tt.want {
 			t.Errorf("header %q = %q, want %q", tt.header, got, tt.want)
 		}
+	}
+}
+
+// --- handleDownload: filename escaping tests (#265) ---
+
+// TestHandleDownload_FilenameWithQuotes_Escaped verifies that a filename
+// containing a literal double-quote is escaped in the Content-Disposition
+// header via mime.FormatMediaType (RFC 6266).
+func TestHandleDownload_FilenameWithQuotes_Escaped(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	// Create a file whose base name contains a double-quote.
+	// Most filesystems (Linux ext4, tmpfs) allow this; skip on those that do not.
+	plain, err := os.CreateTemp(dir, "tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain.Close()
+	quoted := filepath.Join(dir, `foo"bar.txt`)
+	if err := os.Rename(plain.Name(), quoted); err != nil {
+		t.Skip("filesystem does not support \" in filenames:", err)
+	}
+	_ = os.WriteFile(quoted, []byte("data"), 0o644)
+
+	s.dlMu.Lock()
+	s.downloads["dl-quotes"] = quoted
+	s.dlMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/dl-quotes", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	cd := rr.Header().Get("Content-Disposition")
+	// The literal un-escaped sequence `"foo"bar` must not appear.
+	if strings.Contains(cd, `"foo"bar`) {
+		t.Fatalf("unescaped double-quote in Content-Disposition: %q", cd)
+	}
+	// The filename stem must still be present.
+	if !strings.Contains(cd, "foo") {
+		t.Fatalf("filename stem missing from Content-Disposition: %q", cd)
+	}
+}
+
+// TestHandleDownload_FilenameWithBackslash_Escaped confirms that a backslash
+// in a filename is safely encoded rather than treated as an escape character.
+func TestHandleDownload_FilenameWithBackslash_Escaped(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	plain, err := os.CreateTemp(dir, "tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain.Close()
+	bsPath := filepath.Join(dir, `back\slash.txt`)
+	if err := os.Rename(plain.Name(), bsPath); err != nil {
+		t.Skip("filesystem does not support \\ in filenames:", err)
+	}
+	_ = os.WriteFile(bsPath, []byte("data"), 0o644)
+
+	s.dlMu.Lock()
+	s.downloads["dl-bs"] = bsPath
+	s.dlMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/dl-bs", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+
+	cd := rr.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "attachment") {
+		t.Fatalf("Content-Disposition missing 'attachment': %q", cd)
+	}
+}
+
+// infiniteZero is an endless source of zero bytes used to synthesise large
+// request bodies without allocating heap memory.
+type infiniteZero struct{}
+
+func (infiniteZero) Read(p []byte) (int, error) { return len(p), nil }
+
+// --- handleSend body-size limit tests (#264) ---
+
+func TestHandleSend_BodyExceedsLimit_Returns413(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	// Go ≥1.20: mime/multipart limits forms to 10 MiB internally, returning
+	// "multipart: message too large" before MaxBytesReader (512 MiB) fires.
+	// Either limit must yield 413. Sending 11 MiB exercises the multipart limit.
+	var header bytes.Buffer
+	mw := multipart.NewWriter(&header)
+	_ = mw.WriteField("peer", "127.0.0.1:9999")
+	_, _ = mw.CreateFormFile("file", "big.bin")
+	// Do NOT close mw — stream the large payload after the headers.
+
+	body := io.MultiReader(
+		&header,
+		io.LimitReader(infiniteZero{}, 11<<20), // 11 MiB > 10 MiB multipart limit
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleSend(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSend_BodyBelowLimit_RejectsMissingPeer(t *testing.T) {
+	// A well-formed but small body that passes the size gate should proceed to
+	// field validation and return 400 (missing peer), not 413.
+	s := New("127.0.0.1:0", time.Second)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "small.txt")
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleSend(rr, req)
+
+	if rr.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected 413 for small body")
+	}
+	// Peer field is absent → 400, which proves the body was parsed successfully.
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (missing peer), got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

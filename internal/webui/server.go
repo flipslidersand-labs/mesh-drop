@@ -296,7 +296,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSingleFileUpload)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "request body too large") {
+		// "request body too large" — http.MaxBytesReader (Go stdlib)
+		// "message too large"     — mime/multipart hardcoded 10 MiB limit (Go ≥1.20)
+		e := err.Error()
+		if strings.Contains(e, "request body too large") || strings.Contains(e, "message too large") {
 			status = http.StatusRequestEntityTooLarge
 		}
 		http.Error(w, "parse form: "+err.Error(), status)
@@ -416,7 +419,8 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxDirUploadSize)
 	if err := r.ParseMultipartForm(multipartMemory); err != nil {
 		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "request body too large") {
+		e := err.Error()
+		if strings.Contains(e, "request body too large") || strings.Contains(e, "message too large") {
 			status = http.StatusRequestEntityTooLarge
 		}
 		http.Error(w, "parse form: "+err.Error(), status)
