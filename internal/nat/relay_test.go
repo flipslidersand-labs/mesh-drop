@@ -1,6 +1,7 @@
 package nat
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -122,7 +123,10 @@ func TestRelaySessionCleanupOnTimeout(t *testing.T) {
 }
 
 func TestRandomCode(t *testing.T) {
-	got := randomCode(6)
+	got, err := randomCode(6)
+	if err != nil {
+		t.Fatalf("randomCode: %v", err)
+	}
 	if len(got) != 6 {
 		t.Fatalf("len=%d, want 6", len(got))
 	}
@@ -172,7 +176,11 @@ func TestRandomCodeDistribution(t *testing.T) {
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	seen := make(map[rune]bool)
 	for i := 0; i < 5000; i++ {
-		for _, c := range randomCode(6) {
+		code, err := randomCode(6)
+		if err != nil {
+			t.Fatalf("randomCode: %v", err)
+		}
+		for _, c := range code {
 			seen[c] = true
 		}
 		if len(seen) == len(alpha) {
@@ -281,5 +289,73 @@ func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
 		t.Errorf("clientB should not be rate-limited, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleHealth_ReturnsOK(t *testing.T) {
+	ts := httptest.NewServer(NewRelayServer().Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected status=ok, got %v", body["status"])
+	}
+}
+
+func TestHandleHealth_SessionCountIsAccurate(t *testing.T) {
+	srv := NewRelayServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// セッション2件をマップに直接挿入（レート制限回避）
+	srv.mu.Lock()
+	srv.sessions["AAA"] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
+	srv.sessions["BBB"] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
+	srv.mu.Unlock()
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// JSON numbers decode as float64
+	if sessions, ok := body["sessions"].(float64); !ok || int(sessions) != 2 {
+		t.Fatalf("expected sessions=2, got %v", body["sessions"])
+	}
+}
+
+func TestHandleHealth_MethodNotAllowed(t *testing.T) {
+	ts := httptest.NewServer(NewRelayServer().Handler())
+	defer ts.Close()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req, _ := http.NewRequest(method, ts.URL+"/health", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("method %s: expected 405, got %d", method, resp.StatusCode)
+		}
 	}
 }

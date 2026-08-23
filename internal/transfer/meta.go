@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode"
 )
 
 // Meta はコントロールストリームで送信するファイル全体情報。
@@ -20,6 +21,7 @@ type Meta struct {
 	IsPipe     bool       `json:"is_pipe,omitempty"`
 	Compressed bool       `json:"compressed,omitempty"` // チャンクを zstd 圧縮する
 	CompLevel  int        `json:"comp_level,omitempty"` // 0=default(3), 1-9
+	NoResume   bool       `json:"no_resume,omitempty"`  // 送信側が resume を無効化 (#255)
 }
 
 // FileMeta はバッチ転送時の個別ファイル情報。
@@ -124,6 +126,17 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 	return m, json.Unmarshal(buf, &m)
 }
 
+// sanitizeName rejects filenames containing null bytes or ASCII/Unicode control
+// characters that could corrupt terminals, logs, or filesystem operations.
+func sanitizeName(name string) error {
+	for _, r := range name {
+		if r == 0 || unicode.IsControl(r) {
+			return fmt.Errorf("file name contains invalid character %q", r)
+		}
+	}
+	return nil
+}
+
 func readMeta(r io.Reader) (Meta, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -138,6 +151,9 @@ func readMeta(r io.Reader) (Meta, error) {
 	}
 	var m Meta
 	if err := json.Unmarshal(buf, &m); err != nil {
+		return Meta{}, err
+	}
+	if err := sanitizeName(m.Name); err != nil {
 		return Meta{}, err
 	}
 	if !m.IsPipe {

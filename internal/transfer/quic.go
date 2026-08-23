@@ -191,8 +191,12 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	}
 
 	if meta.IsBatch {
-		// ディレクトリ: 既存ファイルをハッシュ検証して完了済みリストを送信側へ返す (#245)
-		dirDone := checkDirDone(outDir, meta.Files)
+		// #255: NoResume=true のとき checkDirDone をスキップして空リストを返す。
+		// 送信側は全チャンクを送るので受信側も全チャンクを待機する必要がある。
+		var dirDone []string
+		if !meta.NoResume {
+			dirDone = checkDirDone(outDir, meta.Files)
+		}
 		rs := ResumeState{DirDone: dirDone}
 		_ = writeResumeState(ns, rs)
 		return meta, nil, peerKey, dirDone, nil
@@ -203,6 +207,9 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
 	outPath := filepath.Base(meta.Name)
+	if err := sanitizeName(outPath); err != nil {
+		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
+	}
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
@@ -431,6 +438,9 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 
 	outPath := filepath.Base(meta.Name)
+	if err := sanitizeName(outPath); err != nil {
+		return fmt.Errorf("invalid file name in metadata: %w", err)
+	}
 	if cp == nil {
 		cp = loadOrCreate(outPath, meta)
 	}

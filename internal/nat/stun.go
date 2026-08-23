@@ -68,8 +68,14 @@ func DiscoverWithConn(conn *net.UDPConn, stunServer string) (string, error) {
 }
 
 // DiscoverExternalIP opens a temporary UDP socket, queries stunServer, and returns
-// the public IPv4. Useful when you only need the IP (e.g. the info command).
+// the public IPv4. Retries up to 3× with exponential backoff on transient errors.
 func DiscoverExternalIP(stunServer string) (net.IP, error) {
+	return retryWithBackoff("STUN Discover", 3, 500*time.Millisecond, func() (net.IP, error) {
+		return discoverExternalIP(stunServer)
+	})
+}
+
+func discoverExternalIP(stunServer string) (net.IP, error) {
 	raddr, err := net.ResolveUDPAddr("udp4", stunServer)
 	if err != nil {
 		return nil, fmt.Errorf("resolve STUN addr: %w", err)
