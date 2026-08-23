@@ -155,7 +155,7 @@ func dispatchConn(ctx context.Context, conn *quic.Conn) error {
 	case meta.IsBatch:
 		return doReceiveDir(ctx, conn, meta, ".", peerKey, dirDone)
 	default:
-		return doReceiveFileResume(ctx, conn, meta, cp, peerKey)
+		return doReceiveFileResume(ctx, conn, meta, cp, peerKey, ".")
 	}
 }
 
@@ -432,14 +432,14 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
 // #359: 一時ファイル (<outPath>.meshdrop.tmp) へ書き込み、ハッシュ検証成功後に
 // os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
-func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) (retErr error) {
+func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outDir string) (retErr error) {
 	defer conn.CloseWithError(0, "done")
 
 	if meta.Chunks < 0 {
 		return fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)
 	}
 
-	outPath := filepath.Base(meta.Name)
+	outPath := filepath.Join(outDir, filepath.Base(meta.Name))
 	if err := sanitizeName(outPath); err != nil {
 		return fmt.Errorf("invalid file name in metadata: %w", err)
 	}
@@ -591,7 +591,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 
 // doReceiveFile は旧互換（resume なし）でシングルファイルを受信する。
 func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []byte) error {
-	return doReceiveFileResume(ctx, conn, meta, nil, peerKey)
+	return doReceiveFileResume(ctx, conn, meta, nil, peerKey, ".")
 }
 
 // --- stream helpers ---
