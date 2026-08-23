@@ -23,9 +23,9 @@ func FuzzSanitizeName(f *testing.F) {
 	f.Add("\x01control.txt")
 	f.Add("\x7fdelete.txt")
 	f.Add("mid\x00null.txt")
-	f.Add("\xc0\xaf") // overlong UTF-8 encoding of '/'
-	f.Add("\xed\xa0\x80") // surrogate half (invalid UTF-8)
-	f.Add("unicode‮txt.") // RTL override character
+	f.Add("\xc0\xaf")      // overlong UTF-8 encoding of '/'
+	f.Add("\xed\xa0\x80")  // surrogate half (invalid UTF-8)
+	f.Add("unicode\u202etxt.") // RTL override character (U+202E)
 	f.Add("..\x00/etc/passwd")
 	f.Add(strings.Repeat("a", 4096)) // long name
 
