@@ -41,16 +41,22 @@ curl -L https://github.com/flipslidersand/mesh-drop/releases/latest/download/mes
 go install github.com/flipslidersand/mesh-drop/cmd/meshdrop@latest
 ```
 
-## Verify a release
+### Verify a release binary (optional)
 
-Each release includes `checksums.txt` with SHA-256 hashes for all binaries.
+Each release includes a `checksums.txt` signed with [cosign](https://github.com/sigstore/cosign) via Sigstore keyless signing.
 
 ```bash
-# Download binary and checksums
-curl -LO https://github.com/flipslidersand/mesh-drop/releases/latest/download/meshdrop-linux-amd64.tar.gz
-curl -LO https://github.com/flipslidersand/mesh-drop/releases/latest/download/checksums.txt
+# 1. Install cosign
+brew install cosign   # macOS
+# or: go install github.com/sigstore/cosign/v2/cmd/cosign@latest
 
-# Verify checksum
+# 2. Verify the checksum signature (downloads transparency log proof automatically)
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.bundle \
+  --certificate-identity-regexp "https://github.com/flipslidersand-labs/mesh-drop/.github/workflows/release.yml" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+# 3. Verify your binary matches the checksum
 sha256sum --check --ignore-missing checksums.txt
 ```
 
