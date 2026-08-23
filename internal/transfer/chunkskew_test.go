@@ -28,7 +28,9 @@ func TestAssignChunks_SkewDetection_Warns(t *testing.T) {
 	w.Close()
 	os.Stderr = orig
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
 
 	if !strings.Contains(buf.String(), "[WARN]") {
 		t.Fatalf("expected skew warning, stderr was: %q", buf.String())
@@ -52,7 +54,9 @@ func TestAssignChunks_EvenDistribution_NoWarn(t *testing.T) {
 	w.Close()
 	os.Stderr = orig
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
 
 	if strings.Contains(buf.String(), "[WARN]") {
 		t.Fatalf("unexpected skew warning for even distribution: %q", buf.String())
@@ -71,7 +75,9 @@ func TestWarnChunkSkew_SingleFile_NoWarn(t *testing.T) {
 	os.Stderr = orig
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
 	if strings.Contains(buf.String(), "[WARN]") {
 		t.Fatalf("single file must not warn: %q", buf.String())
 	}
