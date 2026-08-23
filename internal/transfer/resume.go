@@ -161,7 +161,9 @@ func (cp *checkpoint) save() error {
 
 // finish は転送完了時に未書き込み状態をフラッシュし、状態ファイルを削除する。
 func (cp *checkpoint) finish() {
-	_ = cp.flush()
+	if err := cp.flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: checkpoint flush failed for %s: %v\n", cp.path, err)
+	}
 	_ = os.Remove(cp.path)
 }
 
