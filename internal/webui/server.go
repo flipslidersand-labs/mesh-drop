@@ -528,30 +528,16 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer os.RemoveAll(tmpDir)
 
-		done := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(300 * time.Millisecond)
-			defer ticker.Stop()
-			pct := int64(0)
-			for {
-				select {
-				case <-done:
-					return
-				case <-ticker.C:
-					if pct < total*9/10 {
-						pct += total / 20
-					}
-					s.hub.publish(ProgressEvent{
-						ID: id, Direction: "send",
-						File: dirName, Peer: peerAddr,
-						Sent: pct, Total: total,
-					})
-				}
-			}
-		}()
+		// #319: 擬似タイマーを削除し、progressFn で実転送バイト数を配信する。
+		progressFn := func(sent, tot int64) {
+			s.hub.publish(ProgressEvent{
+				ID: id, Direction: "send",
+				File: dirName, Peer: peerAddr,
+				Sent: sent, Total: tot,
+			})
+		}
 
-		sendErr := transfer.SendDir(s.runCtx, peerAddr, sendPath, 4, nil, lim, compress, compLevel, false)
-		close(done)
+		sendErr := transfer.SendDir(s.runCtx, peerAddr, sendPath, 4, nil, lim, compress, compLevel, false, progressFn)
 
 		ev := ProgressEvent{
 			ID: id, Direction: "send",

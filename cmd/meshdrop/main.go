@@ -408,7 +408,7 @@ func cmdSend() *cobra.Command {
 			}
 			if info.IsDir() {
 				fmt.Printf("→ Connecting to %s (%s) [dir, chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
-				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel, noResume)
+				return transfer.SendDir(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel, noResume, nil)
 			}
 			fmt.Printf("→ Connecting to %s (%s) [chunks=%d]...\n", peer.Name, peer.Addr(), chunks)
 			return transfer.Send(ctx, peer.Addr(), target, chunks, effectiveFingerprint, lim, compress, compressLevel, noResume)
@@ -560,7 +560,7 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 			var sendErr error
 			if isDir {
 				fmt.Printf("→ [%s] Connecting (%s) [dir, chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
+				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume, nil)
 			} else {
 				fmt.Printf("→ [%s] Connecting (%s) [chunks=%d]...\n", p.Name, p.Addr(), nChunks)
 				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
@@ -633,7 +633,7 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 		return err
 	}
 	if info.IsDir() {
-		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel, noResume)
+		return transfer.SendDirNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel, noResume, nil)
 	}
 	return transfer.SendNAT(ctx, udpConn, peerUDP, target, nChunks, fingerprint, lim, compressed, compLevel, noResume)
 }
