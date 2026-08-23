@@ -287,12 +287,15 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(h) //nolint:errcheck
 }
 
+// maxSingleFileUpload is the maximum allowed upload body size for a single file.
+// Declared as a package-level var so tests can override it without sending 512 MiB.
+var maxSingleFileUpload = int64(512 << 20) // 512 MiB (#257)
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	const maxSingleFileUpload = int64(512 << 20) // 512 MiB (#257)
 	r.Body = http.MaxBytesReader(w, r.Body, maxSingleFileUpload)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		status := http.StatusBadRequest
