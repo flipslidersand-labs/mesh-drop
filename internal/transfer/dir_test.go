@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -176,6 +177,9 @@ func TestDoReceiveDir_AllFilesDone(t *testing.T) {
 // TestDoReceiveDir_InvalidOutDir verifies that doReceiveDir returns an error
 // when the output directory is not writable.
 func TestDoReceiveDir_InvalidOutDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod read-only dirs not enforced on Windows")
+	}
 	meta := Meta{
 		Name:    "x",
 		Chunks:  1,
