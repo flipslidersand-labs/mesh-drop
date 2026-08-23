@@ -434,6 +434,15 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte) (retErr error) {
 	defer conn.CloseWithError(0, "done")
+	// #330: Ensure cp.finish() is called on every exit path. The closure captures
+	// cp by reference so it sees the value assigned at line 448 when cp==nil on entry.
+	// finish() is idempotent: flush() is a no-op when not dirty, and os.Remove on a
+	// missing file is silently ignored.
+	defer func() {
+		if cp != nil {
+			cp.finish()
+		}
+	}()
 
 	if meta.Chunks < 0 {
 		return fmt.Errorf("invalid meta.Chunks: %d", meta.Chunks)

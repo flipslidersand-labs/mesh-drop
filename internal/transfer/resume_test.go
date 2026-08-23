@@ -227,6 +227,60 @@ func TestCheckpoint_MetaMismatch_ReturnsNew(t *testing.T) {
 	}
 }
 
+// TestCheckpointFinishIdempotent verifies that calling finish() twice does not
+// panic or return an error. This is important because doReceiveFileResume uses
+// a deferred cp.finish() that runs on every exit path, including paths that
+// already call cp.finish() explicitly (e.g. hash mismatch, success).
+func TestCheckpointFinishIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "idem.bin")
+
+	meta := Meta{Name: "idem.bin", Size: 100, Hash: "deadbeef", Chunks: 2}
+	cp := loadOrCreate(outPath, meta)
+
+	// Mark one chunk done so the state file is flushed to disk.
+	if err := cp.markDone(0); err != nil {
+		t.Fatalf("markDone(0): %v", err)
+	}
+
+	// First finish: should flush dirty state and remove the state file.
+	cp.finish()
+
+	// State file must be gone after first finish.
+	stateFile := checkpointPath(outPath)
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Errorf("state file should be removed after first finish(), err: %v", err)
+	}
+
+	// Second finish: must not panic. os.Remove on a missing file is silently ignored.
+	cp.finish()
+}
+
+// TestCheckpointFinishWithoutDirty verifies that finish() on a clean (never
+// written) checkpoint also removes the state file without error.
+func TestCheckpointFinishWithoutDirty(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "clean.bin")
+	stateFile := checkpointPath(outPath)
+
+	meta := Meta{Name: "clean.bin", Size: 50, Hash: "cafe", Chunks: 1}
+	cp := loadOrCreate(outPath, meta)
+
+	// No markDone calls — state file is never written (small transfer: saveBatchSize
+	// threshold not reached with 0 markDone calls, so dirty=false).
+	// Manually write the file to simulate a real scenario.
+	if err := os.WriteFile(stateFile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cp.finish()
+
+	// The state file should have been removed.
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Errorf("state file should be removed after finish(), err: %v", err)
+	}
+}
+
 // TestCheckpoint_ShortChunksDoneSlice verifies that a state file whose
 // ChunksDone slice is shorter than ChunksTotal (from an older version) is
 // safely padded with false values.
