@@ -1,0 +1,30 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [master, "feat/**", "fix/**"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run benchmarks
+        run: go test -bench=. -benchtime=3s -benchmem -run='^$' ./internal/... | tee bench.txt
+        continue-on-error: true
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.sha }}
+          path: bench.txt
+          retention-days: 30
