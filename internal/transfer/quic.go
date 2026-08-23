@@ -407,6 +407,12 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 			return e
 		}
 	}
+	// Wait for the receiver to close the connection (code 0) before we do.
+	// The receiver calls conn.CloseWithError(0,"done") after hash verification.
+	// Without this wait the deferred CloseWithError below fires while receiver
+	// goroutines are still in AcceptStream, causing them to fail with AppError 0x0.
+	_, _ = conn.AcceptStream(ctx) //nolint:errcheck — expect AppError{0} from receiver close
+
 	fmt.Printf("✓ Sent: %s (%d bytes, %d chunks)\n", filePath, info.Size(), nChunks)
 	return nil
 }

@@ -369,10 +369,13 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 			return e
 		}
 	}
+	// Wait for the receiver to close the connection before we do (same race as doSend).
+	_, _ = conn.AcceptStream(ctx) //nolint:errcheck — expect AppError{0} from receiver close
 
 	// #269: report elapsed time and throughput
 	elapsed := time.Since(start)
 	mbps := float64(totalSize) / elapsed.Seconds() / (1 << 20)
+
 	fmt.Printf("✓ Sent: %s (%d files, %d bytes, %d chunks)\n",
 		filepath.Base(dirPath), len(files), totalSize, len(assignments))
 	fmt.Printf("  Elapsed: %s  Throughput: %.2f MB/s\n", elapsed.Round(time.Millisecond), mbps)
