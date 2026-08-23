@@ -78,7 +78,7 @@ func TestPromptPeerSelection_DefaultOnEmpty(t *testing.T) {
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
-	w.WriteString("\n")
+	_, _ = w.WriteString("\n")
 	w.Close()
 	p, err := promptPeerSelection(peers)
 	os.Stdin = oldStdin
@@ -98,7 +98,7 @@ func TestPromptPeerSelection_ValidIndex(t *testing.T) {
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
-	w.WriteString("2\n")
+	_, _ = w.WriteString("2\n")
 	w.Close()
 	p, err := promptPeerSelection(peers)
 	os.Stdin = oldStdin
@@ -115,7 +115,7 @@ func TestPromptPeerSelection_InvalidIndex(t *testing.T) {
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
-	w.WriteString("99\n")
+	_, _ = w.WriteString("99\n")
 	w.Close()
 	_, err := promptPeerSelection(peers)
 	os.Stdin = oldStdin
@@ -163,8 +163,8 @@ func TestCmdConfigInit_AlreadyExists(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	// Create file first
 	dir := filepath.Join(tmp, "meshdrop")
-	os.MkdirAll(dir, 0o700)
-	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("relay: false\n"), 0o600)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("relay: false\n"), 0o600)
 
 	cmd := cmdConfigInit()
 	err := cmd.Execute()
@@ -180,7 +180,7 @@ func TestPromptPeerSelection_NonInteger(t *testing.T) {
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
 	os.Stdin = r
-	w.WriteString("abc\n")
+	_, _ = w.WriteString("abc\n")
 	w.Close()
 	_, err := promptPeerSelection(peers)
 	os.Stdin = oldStdin
@@ -214,9 +214,9 @@ func TestLoadConfig_Cached(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	globalCfg = nil
-	loadConfig()
+	_ = loadConfig()
 	first := globalCfg
-	loadConfig() // second call should return cached
+	_ = loadConfig() // second call should return cached
 	if first != globalCfg {
 		t.Error("want same pointer on second call (cached)")
 	}
