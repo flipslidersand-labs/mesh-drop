@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -560,8 +561,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := filepath.Base(path)
-	escaped := strings.ReplaceAll(name, `"`, `\"`)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, escaped))
+	// #258: mime.FormatMediaType で RFC 6266 準拠のエスケープを行う
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, path)
 }
 
@@ -627,3 +628,4 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 		s.histMu.Unlock()
 	})
 }
+
