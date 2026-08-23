@@ -22,6 +22,8 @@ type RelayServer struct {
 	sessions       map[string]*rdv
 	ipRate         map[string]*ipBucket // handleJoin の IP ベースレート制限
 	ipCreateRate   map[string]*ipBucket // handleCreate の IP ベースレート制限 (#164)
+	ipSessions        map[string]int   // #357: IP ごとの同時アクティブセッション数
+	maxSessionsPerIP  int              // #357: IP あたりの同時セッション上限
 	trustedProxies []string             // X-Forwarded-For を信頼するプロキシ IP/CIDR (#162)
 	trustedCIDRs   []*net.IPNet         // #214: 起動時に一度 parse した CIDR リスト
 	stopEvict      chan struct{}         // #208: evictExpiredBuckets goroutine を停止する
@@ -69,6 +71,11 @@ const rateBucketGrace = rateWindow
 // 60s から 30s に短縮してサードパーティの不正接続による goroutine リークを軽減する。
 const joinWaitTimeout = 30 * time.Second
 
+// defaultMaxSessionsPerIP は 1 IP が同時に保持できるアクティブセッション数のデフォルト上限。
+// #357: レートリミットは短期バーストを防ぐが、長期保持（セッション積み上げ）は防げない。
+// 悪意あるクライアントが maxSessions 枠を独占するのを防ぐ。
+const defaultMaxSessionsPerIP = 5
+
 type rdv struct {
 	mu        sync.Mutex   // addrA / paired の読み書きを保護する
 	addrA     string       // 最初に登録したピア (受信側)
@@ -77,6 +84,7 @@ type rdv struct {
 	done      chan struct{} // ランデブー完了またはタイムアウトで close される
 	doneOnce  sync.Once    // #215: done の二重 close を防ぐ
 	createdAt time.Time    // #328: セッション作成時刻 (duration 計測用)
+	creatorIP string       // #357: セッション作成者の IP (per-IP カウンタ管理用)
 }
 
 // closeDone は sess.done を一度だけ close する。
@@ -113,13 +121,15 @@ func NewRelayServerFull(trustedProxies []string, maxSess int) *RelayServer {
 		}
 	}
 	s := &RelayServer{
-		sessions:       make(map[string]*rdv),
-		ipRate:         make(map[string]*ipBucket),
-		ipCreateRate:   make(map[string]*ipBucket),
-		trustedProxies: trustedProxies,
-		trustedCIDRs:   cidrs,
-		stopEvict:      make(chan struct{}),
-		maxSessions:    maxSess,
+		sessions:         make(map[string]*rdv),
+		ipRate:           make(map[string]*ipBucket),
+		ipCreateRate:     make(map[string]*ipBucket),
+		ipSessions:       make(map[string]int),
+		maxSessionsPerIP: defaultMaxSessionsPerIP,
+		trustedProxies:   trustedProxies,
+		trustedCIDRs:     cidrs,
+		stopEvict:        make(chan struct{}),
+		maxSessions:      maxSess,
 	}
 	// #176/#180: 定期的に期限切れレートバケットを退避してマップ肥大化を防ぐ。
 	go s.evictExpiredBuckets()
@@ -168,6 +178,16 @@ func safeClose(ch chan struct{}) {
 // #208: Start/StartTLS が返った後に呼ぶことで goroutine リークを防ぐ。
 func (s *RelayServer) Stop() {
 	safeClose(s.stopEvict)
+}
+
+// decrementIPSessions は ip の同時セッション数を 1 減らし、0 になったらマップから削除する。
+// #357: 呼び出し元は s.mu を保持していること。
+func (s *RelayServer) decrementIPSessions(ip string) {
+	if s.ipSessions[ip] <= 1 {
+		delete(s.ipSessions, ip)
+	} else {
+		s.ipSessions[ip]--
+	}
 }
 
 // isTrustedProxy は ip が trustedProxies リストに含まれるか（完全一致または CIDR）を返す。
@@ -358,13 +378,19 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{}), createdAt: time.Now()}
+	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{}), createdAt: time.Now(), creatorIP: clientIP}
 
 	// コード生成・上限チェック・挿入をロック内で行い、重複コードの上書きを防ぐ。
 	s.mu.Lock()
 	if len(s.sessions) >= s.maxSessions {
 		s.mu.Unlock()
 		http.Error(w, "too many sessions", http.StatusServiceUnavailable)
+		return
+	}
+	// #357: IP あたりの同時セッション数が上限に達している場合は拒否する。
+	if s.ipSessions[clientIP] >= s.maxSessionsPerIP {
+		s.mu.Unlock()
+		http.Error(w, "too many sessions from this address", http.StatusTooManyRequests)
 		return
 	}
 	var code string
@@ -383,6 +409,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.sessions[code] = sess
+	s.ipSessions[clientIP]++
 	s.mu.Unlock()
 	s.mSessionsTotal.Add(1)
 
@@ -395,6 +422,7 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(sessionTTL):
 			s.mu.Lock()
 			delete(s.sessions, code)
+			s.decrementIPSessions(clientIP)
 			s.mu.Unlock()
 			sess.closeDone()
 		}
@@ -481,11 +509,13 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 			// ランデブー完了 — セッションを削除して TTL ゴルーチンを終了させる
 			s.mu.Lock()
 			delete(s.sessions, code)
+			s.decrementIPSessions(sess.creatorIP)
 			s.mu.Unlock()
 			sess.closeDone()
 		case <-joinCtx.Done():
 			s.mu.Lock()
 			delete(s.sessions, code)
+			s.decrementIPSessions(sess.creatorIP)
 			s.mu.Unlock()
 			sess.closeDone()
 			http.Error(w, "timeout: peer did not connect within 30s", http.StatusRequestTimeout)

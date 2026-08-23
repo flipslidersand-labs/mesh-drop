@@ -359,3 +359,80 @@ func TestHandleHealth_MethodNotAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestRelayPerIPSessionLimit は 1 IP が maxSessionsPerIP を超えたら 429 を返すことを確認する。
+// rateMaxCreate(5) と干渉しないよう maxSessionsPerIP=2 を使用する。
+func TestRelayPerIPSessionLimit(t *testing.T) {
+	srv := NewRelayServer()
+	srv.maxSessionsPerIP = 2 // rateMaxCreate(5) より小さい値でテスト
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 2 個まで作成できる
+	for i := 0; i < 2; i++ {
+		resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	// 3 個目は per-IP 上限で 429
+	resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected 429 after per-IP session limit, got %d", resp.StatusCode)
+	}
+}
+
+// TestRelayPerIPSessionLimit_Decrement はランデブー完了後にカウンタが減ることを内部状態で確認する。
+func TestRelayPerIPSessionLimit_Decrement(t *testing.T) {
+	srv := NewRelayServer()
+	srv.maxSessionsPerIP = 2
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 2 個作成
+	codes := make([]string, 2)
+	for i := range codes {
+		resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]string
+		json.NewDecoder(resp.Body).Decode(&body) //nolint:errcheck
+		resp.Body.Close()
+		codes[i] = body["code"]
+	}
+
+	// 内部カウンタが 2 になっていることを確認
+	srv.mu.RLock()
+	before := srv.ipSessions["127.0.0.1"]
+	srv.mu.RUnlock()
+	if before != 2 {
+		t.Fatalf("expected ipSessions=2 before rendezvous, got %d", before)
+	}
+
+	// codes[0] でランデブー完了させてカウンタを 1 減らす
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		http.Post(ts.URL+"/session/"+codes[0], "text/plain", strings.NewReader("1.2.3.4:9001")) //nolint:errcheck
+	}()
+	http.Post(ts.URL+"/session/"+codes[0], "text/plain", strings.NewReader("1.2.3.5:9002")) //nolint:errcheck
+	<-done
+
+	// カウンタが 1 に減っていることを確認
+	srv.mu.RLock()
+	after := srv.ipSessions["127.0.0.1"]
+	srv.mu.RUnlock()
+	if after != 1 {
+		t.Errorf("expected ipSessions=1 after rendezvous, got %d", after)
+	}
+}
