@@ -355,7 +355,7 @@ func TestHandleSend_BodyExceedsLimit_Returns413(t *testing.T) {
 			}
 			written += n
 		}
-		mw.Close()
+		_ = mw.Close()
 		pw.Close()
 	}()
 
@@ -382,7 +382,7 @@ func TestHandleSend_SmallBody_NotRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = part.Write([]byte("hello world"))
-	mw.Close()
+	_ = mw.Close()
 
 	s := New("127.0.0.1:0", time.Second)
 	req := httptest.NewRequest(http.MethodPost, "/api/send", &body)
