@@ -506,7 +506,7 @@ func TestHandleCreate_MaxSessionsRejection(t *testing.T) {
 
 	// Fill the map directly to avoid hitting the per-IP create rate limit.
 	srv.mu.Lock()
-	for i := 0; i < maxSessions; i++ {
+	for i := 0; i < defaultMaxSessions; i++ {
 		key := fmt.Sprintf("FILL%08d", i)
 		srv.sessions[key] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	}
@@ -518,7 +518,7 @@ func TestHandleCreate_MaxSessionsRejection(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 when maxSessions reached, got %d", resp.StatusCode)
+		t.Errorf("expected 503 when defaultMaxSessions reached, got %d", resp.StatusCode)
 	}
 
 	// Clear the map; the next create must succeed.

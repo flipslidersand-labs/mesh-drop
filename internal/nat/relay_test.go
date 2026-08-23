@@ -103,22 +103,22 @@ func TestRelaySessionCleanupOnTimeout(t *testing.T) {
 	defer ts.Close()
 
 	// handleCreate を直接呼び、TTL ゴルーチンが短時間で走ることを確認できないため、
-	// maxSessions 制限のテストで代替する。セッションマップを直接埋めて
+	// defaultMaxSessions 制限のテストで代替する。セッションマップを直接埋めて
 	// per-IP 作成レート制限を回避する。
 	srv.mu.Lock()
-	for i := 0; i < maxSessions; i++ {
+	for i := 0; i < defaultMaxSessions; i++ {
 		key := fmt.Sprintf("FILL%08d", i)
 		srv.sessions[key] = &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	}
 	srv.mu.Unlock()
-	// maxSessions 到達 → 次の POST は 503
+	// defaultMaxSessions 到達 → 次の POST は 503
 	resp, err := http.Post(ts.URL+"/session", "text/plain", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 after maxSessions, got %d", resp.StatusCode)
+		t.Errorf("expected 503 after defaultMaxSessions, got %d", resp.StatusCode)
 	}
 }
 
