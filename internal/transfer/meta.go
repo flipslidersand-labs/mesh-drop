@@ -140,8 +140,9 @@ func sanitizeName(s string) error {
 			return fmt.Errorf("name contains control character at byte %d: %q", i, s)
 		}
 	}
-	// Reject absolute paths (path traversal via absolute reference).
-	if filepath.IsAbs(s) {
+	// Reject absolute paths. filepath.IsAbs catches C:\ on Windows;
+	// strings.HasPrefix catches Unix /path even when running on Windows.
+	if filepath.IsAbs(s) || strings.HasPrefix(s, "/") {
 		return fmt.Errorf("name must not be an absolute path: %q", s)
 	}
 	// Reject any path component that is ".." (directory escape).

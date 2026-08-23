@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,5 +113,32 @@ func TestHashFileAt_LargeFile(t *testing.T) {
 	}
 	if hAt != hReader {
 		t.Errorf("hashFileAt large mismatch")
+	}
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+func TestHashReader_Error(t *testing.T) {
+	want := fmt.Errorf("injected read error")
+	_, err := hashReader(errReader{want})
+	if err == nil {
+		t.Fatal("expected error from hashReader when reader fails, got nil")
+	}
+}
+
+func TestHashFileAt_ClosedFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "closed*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, werr := f.WriteString("some data"); werr != nil {
+		t.Fatal(werr)
+	}
+	f.Close()
+	_, err = hashFileAt(f, 9)
+	if err == nil {
+		t.Fatal("expected error when hashing closed file, got nil")
 	}
 }
