@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -126,8 +128,9 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 	return m, json.Unmarshal(buf, &m)
 }
 
-// sanitizeName は名前文字列に制御文字・null バイト・不正 UTF-8 が含まれないかを検証する。
-// ログ汚染やファイルシステムの予期しない挙動を防ぐ (#325)。
+// sanitizeName は名前文字列に制御文字・null バイト・不正 UTF-8・絶対パス・
+// パストラバーサル（..）が含まれないかを検証する。
+// ログ汚染やファイルシステムの予期しない挙動を防ぐ (#325, #348)。
 func sanitizeName(s string) error {
 	if !utf8.ValidString(s) {
 		return fmt.Errorf("name contains invalid UTF-8: %q", s)
@@ -135,6 +138,16 @@ func sanitizeName(s string) error {
 	for i, r := range s {
 		if r == utf8.RuneError || r < 0x20 || r == 0x7f {
 			return fmt.Errorf("name contains control character at byte %d: %q", i, s)
+		}
+	}
+	// Reject absolute paths (path traversal via absolute reference).
+	if filepath.IsAbs(s) {
+		return fmt.Errorf("name must not be an absolute path: %q", s)
+	}
+	// Reject any path component that is ".." (directory escape).
+	for _, part := range strings.Split(filepath.ToSlash(s), "/") {
+		if part == ".." {
+			return fmt.Errorf("name contains path traversal component: %q", s)
 		}
 	}
 	return nil
