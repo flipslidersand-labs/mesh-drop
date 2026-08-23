@@ -8,13 +8,25 @@ linters:
     - staticcheck
   settings:
     errcheck:
+      check-type-assertions: false
       exclude-functions:
-        # JSON レスポンス書き込みはベストエフォートで無視するのが慣習
+        # JSON / fmt 書き込みはベストエフォートで無視するのが慣習
         - (encoding/json.Encoder).Encode
-        # ソケット/接続のクローズはエラーパス cleanup で無視するのが慣習
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
         - (*net.UDPConn).Close
         - (net.Conn).Close
         - (net.PacketConn).Close
+        # QUIC コネクション・ストリーム・リスナーのクローズ
+        - (github.com/quic-go/quic-go.Connection).CloseWithError
+        - (github.com/quic-go/quic-go.EarlyConnection).CloseWithError
+        - (github.com/quic-go/quic-go.Stream).Close
+        - (github.com/quic-go/quic-go.SendStream).Close
+        - (github.com/quic-go/quic-go.Listener).Close
+        - (github.com/quic-go/quic-go.EarlyListener).Close
+        # io.Closer 実装のクローズ
         - (io.Closer).Close
         - (io.ReadCloser).Close
         - (*io.PipeWriter).Close
@@ -25,14 +37,3 @@ linters:
         # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
         - os.Remove
         - os.RemoveAll
-        # fmt 書き込みはベストエフォートで無視するのが慣習
-        - fmt.Fprintf
-        - fmt.Fprintln
-        - fmt.Fprint
-
-issues:
-  exclude-rules:
-    # テストファイルでは errcheck を緩和 — テスト用クローズ/Write は失敗ではない
-    - path: _test\.go
-      linters:
-        - errcheck
