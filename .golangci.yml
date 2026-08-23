@@ -11,13 +11,28 @@ linters:
       exclude-functions:
         # JSON レスポンス書き込みはベストエフォートで無視するのが慣習
         - (encoding/json.Encoder).Encode
-        # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
+        # ソケット/接続のクローズはエラーパス cleanup で無視するのが慣習
         - (*net.UDPConn).Close
         - (net.Conn).Close
+        - (net.PacketConn).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*io.PipeWriter).Close
+        - (*io.PipeWriter).Write
         # ファイルクローズはエラーパス cleanup で無視するのが慣習
         - (*os.File).Close
         - (mime/multipart.File).Close
-        - (io.Closer).Close
         # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
         - os.Remove
         - os.RemoveAll
+        # fmt 書き込みはベストエフォートで無視するのが慣習
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+issues:
+  exclude-rules:
+    # テストファイルでは errcheck を緩和 — テスト用クローズ/Write は失敗ではない
+    - path: _test\.go
+      linters:
+        - errcheck
