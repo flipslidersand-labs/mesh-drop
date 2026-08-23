@@ -15,6 +15,7 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - fmt.Fprint
+        - fmt.Printf
         # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
         - (*net.UDPConn).Close
         - (net.Conn).Close
@@ -37,3 +38,10 @@ linters:
         # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
         - os.Remove
         - os.RemoveAll
+
+exclusions:
+  rules:
+    # テストファイルは errcheck を無効化（セットアップ失敗は後続のテスト失敗で検出できる）
+    - path: "_test\\.go"
+      linters:
+        - errcheck
