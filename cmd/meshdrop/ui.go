@@ -20,6 +20,7 @@ func cmdUI() *cobra.Command {
 	var port int
 	var noOpen bool
 	var discoverTimeout time.Duration
+	var authToken string
 	cmd := &cobra.Command{
 		Use:   "ui",
 		Short: "Start local Web UI (drag & drop file transfer)",
@@ -28,6 +29,9 @@ func cmdUI() *cobra.Command {
 			url := fmt.Sprintf("http://%s", addr)
 
 			fmt.Printf("MeshDrop UI  →  %s\n", url)
+			if authToken != "" {
+				fmt.Println("Authentication enabled (--auth-token).")
+			}
 			fmt.Println("Press Ctrl+C to stop.")
 
 			if !noOpen {
@@ -38,6 +42,7 @@ func cmdUI() *cobra.Command {
 			defer stop()
 
 			srv := webui.New(addr, discoverTimeout)
+			srv.AuthToken = authToken
 			if err := srv.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
 			}
@@ -47,6 +52,7 @@ func cmdUI() *cobra.Command {
 	cmd.Flags().IntVarP(&port, "port", "p", 8765, "HTTP listen port")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open browser automatically")
 	cmd.Flags().DurationVar(&discoverTimeout, "discover", 3*time.Second, "peer discovery timeout per poll")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "require Bearer token or ?token= query param to access the Web UI (empty = no auth)")
 	return cmd
 }
 

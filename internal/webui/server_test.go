@@ -203,3 +203,117 @@ func TestHandlePeers_ReturnsJSON(t *testing.T) {
 		}
 	}
 }
+
+// --- authMiddleware tests ---
+
+func newOKHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func TestAuthMiddleware_NoToken_PassThrough(t *testing.T) {
+	// token == "" → middleware is a no-op; all requests pass through.
+	h := authMiddleware("", newOKHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_ValidBearerToken(t *testing.T) {
+	const token = "s3cr3t"
+	h := authMiddleware(token, newOKHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
+	const token = "s3cr3t"
+	h := authMiddleware(token, newOKHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer wrongtoken")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+	if rr.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("expected WWW-Authenticate header")
+	}
+}
+
+func TestAuthMiddleware_NoCredentials_Returns401(t *testing.T) {
+	const token = "s3cr3t"
+	h := authMiddleware(token, newOKHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_QueryParamToken(t *testing.T) {
+	const token = "s3cr3t"
+	h := authMiddleware(token, newOKHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/?token="+token, nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_WrongQueryParam_Returns401(t *testing.T) {
+	const token = "s3cr3t"
+	h := authMiddleware(token, newOKHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/?token=wrong", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+// --- secureHeaders tests ---
+
+func TestSecureHeaders(t *testing.T) {
+	h := secureHeaders(newOKHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"X-Frame-Options", "DENY"},
+		{"X-Content-Type-Options", "nosniff"},
+		{"Referrer-Policy", "no-referrer"},
+		{"Content-Security-Policy", "default-src 'self'"},
+	}
+	for _, tt := range tests {
+		if got := rr.Header().Get(tt.header); got != tt.want {
+			t.Errorf("header %q = %q, want %q", tt.header, got, tt.want)
+		}
+	}
+}
