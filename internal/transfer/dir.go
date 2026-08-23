@@ -637,7 +637,7 @@ func VerifyIntegrity(outDir string, files []FileMeta) error {
 			return fmt.Errorf("[INTEGRITY FAIL] hash %s: %w", fm.Path, hashErr)
 		}
 		if fm.Hash != "" && got != fm.Hash {
-			return fmt.Errorf("[INTEGRITY FAIL] %s: expected=%s... got=%s...",
+			return fmt.Errorf("[INTEGRITY FAIL] %s: expected=%s got=%s",
 				fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
 		}
 		verified++
