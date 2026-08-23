@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/flipslidersand/mesh-drop/internal/config"
 	"github.com/flipslidersand/mesh-drop/internal/webui"
 )
 
@@ -60,6 +61,7 @@ func cmdUI() *cobra.Command {
 
 			srv := webui.New(addr, discoverTimeout)
 			srv.AuthToken = authToken
+			srv.HistPath = config.DataPath("history.json")
 			if err := srv.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
 			}
