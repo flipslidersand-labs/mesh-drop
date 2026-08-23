@@ -3,7 +3,7 @@ package nat
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -30,15 +30,15 @@ func retryWithBackoff[T any](name string, attempts int, base time.Duration, fn f
 		lastErr = err
 		var pe *permanentError
 		if errors.As(err, &pe) {
-			log.Printf("NAT: %s attempt %d/%d failed (permanent): %v", name, i, attempts, err)
+			slog.Debug("NAT retry", "op", name, "attempt", i, "max", attempts, "permanent", true, "err", err)
 			return zero, err
 		}
 		if i < attempts {
-			log.Printf("NAT: %s attempt %d/%d failed: %v — retrying in %s", name, i, attempts, err, delay)
+			slog.Debug("NAT retry", "op", name, "attempt", i, "max", attempts, "err", err, "next_in", delay)
 			time.Sleep(delay)
 			delay *= 2
 		} else {
-			log.Printf("NAT: %s attempt %d/%d failed: %v", name, i, attempts, err)
+			slog.Debug("NAT retry", "op", name, "attempt", i, "max", attempts, "err", err)
 		}
 	}
 	return zero, fmt.Errorf("%s failed after %d attempts: %w", name, attempts, lastErr)

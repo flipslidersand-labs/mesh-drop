@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -31,14 +31,27 @@ var version string
 // 非対話的環境（CI/スクリプト）で TOFU なし動作を明示的に許可する。
 var allowNoTOFU bool
 
+// verbose はグローバルフラグ --verbose/-v で設定される。
+// 有効時は slog.LevelDebug を使用し、内部パッケージの詳細ログを stderr に出力する。
+var verbose bool
+
 func main() {
 	root := &cobra.Command{
 		Use:     "meshdrop",
 		Short:   "P2P encrypted file transfer",
 		Version: version,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if verbose {
+				slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+					Level: slog.LevelDebug,
+				})))
+			}
+			return nil
+		},
 	}
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
+	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging to stderr")
 	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI())
 	root.InitDefaultCompletionCmd()
 	if err := root.Execute(); err != nil {
@@ -109,7 +122,7 @@ func cmdReceive() *cobra.Command {
 			if pipe {
 				go func() {
 					if err := discovery.Advertise(ctx, port, nil); err != nil && !errors.Is(err, context.Canceled) {
-						log.Printf("mDNS: %v", err)
+						slog.Debug("mDNS", "err", err)
 					}
 				}()
 				return transfer.ListenPipe(ctx, addr)
@@ -123,7 +136,7 @@ func cmdReceive() *cobra.Command {
 			}
 			go func() {
 				if err := discovery.Advertise(ctx, port, bundle.Fingerprint); err != nil && !errors.Is(err, context.Canceled) {
-					log.Printf("mDNS: %v", err)
+					slog.Debug("mDNS", "err", err)
 				}
 			}()
 			return transfer.ListenWithBundle(ctx, addr, bundle)
@@ -149,7 +162,7 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 	fmt.Printf("Querying STUN (%s)...\n", nat.DefaultSTUN)
 	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
 	if err != nil {
-		log.Printf("STUN via socket failed (%v), trying fallback...", err)
+		slog.Debug("STUN via socket failed, trying fallback", "err", err)
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
 			udpConn.Close()
@@ -506,7 +519,7 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 	fmt.Printf("Querying STUN (%s)...\n", nat.DefaultSTUN)
 	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
 	if err != nil {
-		log.Printf("STUN via socket failed (%v), trying fallback...", err)
+		slog.Debug("STUN via socket failed, trying fallback", "err", err)
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
 			udpConn.Close()
