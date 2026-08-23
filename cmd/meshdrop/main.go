@@ -372,7 +372,7 @@ func discoverAndSelect(ctx context.Context, timeout time.Duration) (discovery.Pe
 		return discovery.Peer{}, err
 	}
 	if len(peers) == 0 {
-		return discovery.Peer{}, fmt.Errorf("no MeshDrop peers found (is receiver running?)")
+		return discovery.Peer{}, fmt.Errorf("no peers found via mDNS (%.0fs timeout).\nIf you're on different networks or behind NAT, try relay mode:\n  meshdrop receive --relay <RELAY_URL>\n  meshdrop send --relay <RELAY_URL> --code <CODE> <file>", timeout.Seconds())
 	}
 	fmt.Printf("Found %d peer(s):\n", len(peers))
 	for i, p := range peers {
@@ -416,7 +416,7 @@ func discoverAll(ctx context.Context, timeout time.Duration) ([]discovery.Peer, 
 		return nil, err
 	}
 	if len(peers) == 0 {
-		return nil, fmt.Errorf("no MeshDrop peers found (is receiver running?)")
+		return nil, fmt.Errorf("no peers found via mDNS (%.0fs timeout).\nIf you're on different networks or behind NAT, try relay mode:\n  meshdrop receive --relay <RELAY_URL>\n  meshdrop send --relay <RELAY_URL> --code <CODE> <file>", timeout.Seconds())
 	}
 	fmt.Printf("Found %d peer(s):\n", len(peers))
 	for _, p := range peers {
