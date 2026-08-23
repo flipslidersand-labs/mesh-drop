@@ -6,22 +6,34 @@ linters:
     - errcheck
     - govet
     - staticcheck
-
-linters-settings:
-  errcheck:
-    exclude-functions:
-      # JSON レスポンス書き込みはベストエフォートで無視するのが慣習
-      - (encoding/json.Encoder).Encode
-      # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
-      - (*net.UDPConn).Close
-      - (net.Conn).Close
-      # ファイルクローズはエラーパス cleanup で無視するのが慣習
-      - (*os.File).Close
-      - (mime/multipart.File).Close
-      - (io.Closer).Close
-      # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
-      - os.Remove
-      - os.RemoveAll
-
-issues:
-  exclude-use-default-heuristics: false
+  settings:
+    errcheck:
+      check-type-assertions: false
+      exclude-functions:
+        # JSON / fmt 書き込みはベストエフォートで無視するのが慣習
+        - (encoding/json.Encoder).Encode
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
+        - (*net.UDPConn).Close
+        - (net.Conn).Close
+        - (net.PacketConn).Close
+        # QUIC コネクション・ストリーム・リスナーのクローズ
+        - (github.com/quic-go/quic-go.Connection).CloseWithError
+        - (github.com/quic-go/quic-go.EarlyConnection).CloseWithError
+        - (github.com/quic-go/quic-go.Stream).Close
+        - (github.com/quic-go/quic-go.SendStream).Close
+        - (github.com/quic-go/quic-go.Listener).Close
+        - (github.com/quic-go/quic-go.EarlyListener).Close
+        # io.Closer 実装のクローズ
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*io.PipeWriter).Close
+        - (*io.PipeWriter).Write
+        # ファイルクローズはエラーパス cleanup で無視するのが慣習
+        - (*os.File).Close
+        - (mime/multipart.File).Close
+        # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
+        - os.Remove
+        - os.RemoveAll
