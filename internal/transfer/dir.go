@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,17 +39,25 @@ type walkEntry struct {
 
 // WalkDir はディレクトリを再帰的に走査して FileMeta リストを返す。
 // BLAKE3 ハッシュは runtime.NumCPU() 個のゴルーチンで並列計算する。
-func WalkDir(dirPath string) ([]FileMeta, error) {
+// ctx はキャンセル伝播に使用する。シンボリックリンクはスキップする。
+func WalkDir(ctx context.Context, dirPath string) ([]FileMeta, error) {
 	base := filepath.Clean(dirPath)
 
 	// Phase 1: collect entries sequentially (filesystem metadata only, no I/O).
 	var entries []walkEntry
-	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
 		rel, err := filepath.Rel(base, path)
 		if err != nil {
@@ -80,7 +89,7 @@ func WalkDir(dirPath string) ([]FileMeta, error) {
 	}
 	close(jobCh)
 
-	g, _ := errgroup.WithContext(context.Background())
+	g, _ := errgroup.WithContext(ctx)
 
 	for w := 0; w < concurrency; w++ {
 		g.Go(func() error {
@@ -192,7 +201,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
-	files, err := WalkDir(dirPath)
+	files, err := WalkDir(ctx, dirPath)
 	if err != nil {
 		return fmt.Errorf("walk dir: %w", err)
 	}
