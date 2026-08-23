@@ -444,3 +444,33 @@ func TestReadMeta_FilePathControlChars(t *testing.T) {
 		}
 	}
 }
+
+// TestReadMeta_AbsoluteNameRejected verifies that sanitizeName rejects absolute paths.
+func TestReadMeta_AbsoluteNameRejected(t *testing.T) {
+	m := Meta{Name: "/absolute/path", Size: 1, Chunks: 1}
+	raw, err := writeRawMeta(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readMeta(bytes.NewReader(raw))
+	if err == nil {
+		t.Error("expected error for absolute name, got nil")
+	}
+}
+
+// TestReadMeta_FilePathTraversalViaDots verifies that sanitizeName rejects paths
+// containing ".." components (#325).
+func TestReadMeta_FilePathTraversalViaDots(t *testing.T) {
+	m := Meta{
+		Name: "dir", Size: 1, Chunks: 1, IsBatch: true,
+		Files: []FileMeta{{Path: "subdir/../evil.txt", Size: 1, Hash: "aabb"}},
+	}
+	raw, err := writeRawMeta(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readMeta(bytes.NewReader(raw))
+	if err == nil {
+		t.Error("expected error for path with '..' component, got nil")
+	}
+}

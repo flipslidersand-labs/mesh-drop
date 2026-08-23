@@ -91,9 +91,15 @@ func TestConfigPath_Home(t *testing.T) {
 
 func TestDataPath_XDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
+<<<<<<< HEAD
 	got := DataPath("tofu.json")
 	want := "/custom/data/meshdrop/tofu.json"
 	if filepath.ToSlash(got) != filepath.ToSlash(want) {
+=======
+	got := DataPath("resume.db")
+	want := "/custom/data/meshdrop/resume.db"
+	if got != want {
+>>>>>>> 6ce2308d (test(#281,#310): raise total coverage to 50% and update CI threshold)
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -101,8 +107,13 @@ func TestDataPath_XDG(t *testing.T) {
 func TestDataPath_Home(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	home, _ := os.UserHomeDir()
+<<<<<<< HEAD
 	got := DataPath("tofu.json")
 	want := filepath.Join(home, ".meshdrop", "tofu.json")
+=======
+	got := DataPath("resume.db")
+	want := filepath.Join(home, ".meshdrop", "resume.db")
+>>>>>>> 6ce2308d (test(#281,#310): raise total coverage to 50% and update CI threshold)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

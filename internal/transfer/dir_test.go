@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,113 @@ func TestCheckDirDone_EmptyDir(t *testing.T) {
 	done := checkDirDone(dir, files)
 	if len(done) != 0 {
 		t.Fatalf("expected empty, got %v", done)
+	}
+}
+
+// TestDoReceiveDir_AllFilesDone verifies that doReceiveDir returns successfully
+// when all files are already marked done — no QUIC connection is needed because
+// expectedChunks is 0 and no streams are accepted.
+func TestDoReceiveDir_AllFilesDone(t *testing.T) {
+	outDir := t.TempDir()
+
+	meta := Meta{
+		Name:    "mydir",
+		Chunks:  1,
+		IsBatch: true,
+		Files: []FileMeta{
+			{Path: "a/b.txt", Size: 5, Hash: ""},
+		},
+	}
+
+	// Write the file so the dir exists (doReceiveDir calls MkdirAll internally).
+	if err := os.MkdirAll(filepath.Join(outDir, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "a", "b.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark the file as already done → expectedChunks=0 → no conn usage.
+	dirDone := []string{"a/b.txt"}
+	err := doReceiveDir(context.Background(), nil, meta, outDir, nil, dirDone)
+	if err != nil {
+		t.Fatalf("doReceiveDir with all-done files: %v", err)
+	}
+}
+
+// TestDoReceiveDir_InvalidOutDir verifies that doReceiveDir returns an error
+// when outDir cannot be resolved.
+func TestDoReceiveDir_InvalidOutDir(t *testing.T) {
+	meta := Meta{
+		Name:    "x",
+		Chunks:  1,
+		IsBatch: true,
+		Files:   []FileMeta{{Path: "file.txt", Size: 0, Hash: ""}},
+	}
+	// Pass an unresolvable outDir (all valid on Linux; skip this test pattern).
+	// Instead test the MkdirAll failure path via a non-writable parent.
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skip("cannot set read-only dir")
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	err := doReceiveDir(context.Background(), nil, meta, dir, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when outDir is not writable")
+	}
+}
+
+// errWriter is a writer that always fails with the given error.
+type errWriter struct{ err error }
+
+func (e errWriter) Write(_ []byte) (int, error) { return 0, e.err }
+
+func TestWriteMeta_WriterError(t *testing.T) {
+	w := errWriter{errors.New("inject write error")}
+	err := writeMeta(w, Meta{Name: "x", Size: 1, Chunks: 1})
+	if err == nil {
+		t.Fatal("expected error from failing writer")
+	}
+}
+
+func TestWriteChunkMeta_WriterError(t *testing.T) {
+	w := errWriter{errors.New("inject write error")}
+	err := writeChunkMeta(w, ChunkMeta{Index: 0, Size: 1})
+	if err == nil {
+		t.Fatal("expected error from failing writer")
+	}
+}
+
+func TestWriteResumeState_WriterError(t *testing.T) {
+	w := errWriter{errors.New("inject write error")}
+	err := writeResumeState(w, ResumeState{ChunksDone: []int{0}})
+	if err == nil {
+		t.Fatal("expected error from failing writer")
+	}
+}
+
+func TestWalkDir_SkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "real.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	files, err := WalkDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should see only real.txt, not link.txt.
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file (symlink skipped), got %d: %v", len(files), files)
+	}
+	if files[0].Path != "real.txt" {
+		t.Errorf("expected real.txt, got %q", files[0].Path)
 	}
 }
 
