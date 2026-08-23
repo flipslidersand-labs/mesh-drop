@@ -6,22 +6,18 @@ linters:
     - errcheck
     - govet
     - staticcheck
-
-linters-settings:
-  errcheck:
-    exclude-functions:
-      # JSON レスポンス書き込みはベストエフォートで無視するのが慣習
-      - (encoding/json.Encoder).Encode
-      # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
-      - (*net.UDPConn).Close
-      - (net.Conn).Close
-      # ファイルクローズはエラーパス cleanup で無視するのが慣習
-      - (*os.File).Close
-      - (mime/multipart.File).Close
-      - (io.Closer).Close
-      # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
-      - os.Remove
-      - os.RemoveAll
-
-issues:
-  exclude-use-default-heuristics: false
+  settings:
+    errcheck:
+      exclude-functions:
+        # JSON レスポンス書き込みはベストエフォートで無視するのが慣習
+        - (encoding/json.Encoder).Encode
+        # UDP/TCP ソケットのクローズはエラーパス cleanup で無視するのが慣習
+        - (*net.UDPConn).Close
+        - (net.Conn).Close
+        # ファイルクローズはエラーパス cleanup で無視するのが慣習
+        - (*os.File).Close
+        - (mime/multipart.File).Close
+        - (io.Closer).Close
+        # 一時ファイル・ディレクトリの削除は cleanup でエラーを無視するのが慣習
+        - os.Remove
+        - os.RemoveAll
