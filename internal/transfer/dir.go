@@ -385,7 +385,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
 // dirDone は送信側がスキップした完了済みファイルの相対パス一覧 (#245)。
-func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte, dirDone []string) (retErr error) {
+func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte, dirDone []string, verify bool) (retErr error) {
 	if conn != nil {
 		defer conn.CloseWithError(0, "done")
 	}
@@ -529,6 +529,38 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 
 	fmt.Printf("✓ Hash OK  (%d files)\n", len(meta.Files))
 	fmt.Printf("✓ Saved: %s/ (%d files, %d bytes)\n", outDir, len(meta.Files), totalSize)
+
+	if verify {
+		return VerifyIntegrity(outDir, meta.Files)
+	}
+	return nil
+}
+
+// VerifyIntegrity re-reads every file in outDir and checks its BLAKE3 hash
+// against the expected value in files. Returns an error (prefixed with
+// "[INTEGRITY FAIL]") on the first mismatch. On success it prints
+// "[OK] integrity verified: N files".
+// Enabled via the --verify flag to opt in to the extra disk-read pass.
+func VerifyIntegrity(outDir string, files []FileMeta) error {
+	verified := 0
+	for _, fm := range files {
+		path := filepath.Join(outDir, fm.Path)
+		fh, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("[INTEGRITY FAIL] open %s: %w", fm.Path, err)
+		}
+		got, hashErr := hashReader(fh)
+		fh.Close()
+		if hashErr != nil {
+			return fmt.Errorf("[INTEGRITY FAIL] hash %s: %w", fm.Path, hashErr)
+		}
+		if fm.Hash != "" && got != fm.Hash {
+			return fmt.Errorf("[INTEGRITY FAIL] %s: expected=%s... got=%s...",
+				fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
+		}
+		verified++
+	}
+	fmt.Printf("[OK] integrity verified: %d files\n", verified)
 	return nil
 }
 

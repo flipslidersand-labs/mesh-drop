@@ -161,6 +161,7 @@ func cmdReceive() *cobra.Command {
 	var port int
 	var relayURL string
 	var pipe bool
+	var verify bool
 	cmd := &cobra.Command{
 		Use:   "receive",
 		Short: "Receive a file/directory (LAN mDNS, or --relay for NAT traversal)",
@@ -188,7 +189,7 @@ func cmdReceive() *cobra.Command {
 			addr := fmt.Sprintf("0.0.0.0:%d", port)
 
 			if relayURL != "" {
-				return receiveNAT(ctx, port, relayURL, pipe)
+				return receiveNAT(ctx, port, relayURL, pipe, verify)
 			}
 
 			if pipe {
@@ -211,16 +212,17 @@ func cmdReceive() *cobra.Command {
 					slog.Debug("mDNS", "err", err)
 				}
 			}()
-			return transfer.ListenWithBundle(ctx, addr, bundle)
+			return transfer.ListenWithBundle(ctx, addr, bundle, verify)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", discovery.DefaultPort, "listen port")
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay server URL for NAT traversal (e.g. http://relay:8080)")
 	cmd.Flags().BoolVar(&pipe, "pipe", false, "write received data to stdout instead of a file")
+	cmd.Flags().BoolVar(&verify, "verify", false, "re-verify all received files after transfer (BLAKE3)")
 	return cmd
 }
 
-func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error {
+func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool, verify bool) error {
 	code, err := nat.CreateSession(relayURL)
 	if err != nil {
 		return fmt.Errorf("relay: %w", err)
@@ -267,7 +269,7 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 	if pipe {
 		return transfer.ListenPipeNAT(ctx, udpConn)
 	}
-	return transfer.ListenNAT(ctx, udpConn)
+	return transfer.ListenNAT(ctx, udpConn, verify)
 }
 
 // --- send ---
