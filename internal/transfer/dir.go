@@ -481,6 +481,18 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	return nil
 }
 
+// validateDirChunkHandle checks that cm.FileIndex is in range and the file
+// handle is not nil (nil means the file was already completed; #256/#263).
+func validateDirChunkHandle(handles []fileHandle, cm ChunkMeta) error {
+	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
+		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
+	}
+	if handles[cm.FileIndex].f == nil {
+		return fmt.Errorf("chunk %d: file index %d is already complete, unexpected chunk received", cm.Index, cm.FileIndex)
+	}
+	return nil
+}
+
 func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer, peerKey []byte, compressed bool) error {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
@@ -498,18 +510,11 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 		return fmt.Errorf("chunk meta: %w", err)
 	}
 
-	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
-		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
-	}
-	// 完了済みファイルのハンドルは f==nil (#256)
-	if handles[cm.FileIndex].f == nil {
-		return fmt.Errorf("chunk %d: file index %d is already complete, unexpected chunk received", cm.Index, cm.FileIndex)
+	if err := validateDirChunkHandle(handles, cm); err != nil {
+		return err
 	}
 	if cm.Offset < 0 || cm.Size < 0 {
 		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
-	}
-	if handles[cm.FileIndex].f == nil {
-		return fmt.Errorf("chunk %d: file %d is already complete", cm.Index, cm.FileIndex)
 	}
 	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
 		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
