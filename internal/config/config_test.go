@@ -88,3 +88,22 @@ func TestConfigPath_Home(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestDataPath_XDG(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/custom/data")
+	got := DataPath("resume.db")
+	want := "/custom/data/meshdrop/resume.db"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDataPath_Home(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	home, _ := os.UserHomeDir()
+	got := DataPath("resume.db")
+	want := filepath.Join(home, ".meshdrop", "resume.db")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
