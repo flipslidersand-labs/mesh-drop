@@ -38,7 +38,11 @@ type walkEntry struct {
 
 // WalkDir はディレクトリを再帰的に走査して FileMeta リストを返す。
 // BLAKE3 ハッシュは runtime.NumCPU() 個のゴルーチンで並列計算する。
-func WalkDir(dirPath string) ([]FileMeta, error) {
+// ctx がキャンセルされると速やかに error を返す。
+func WalkDir(ctx context.Context, dirPath string) ([]FileMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	base := filepath.Clean(dirPath)
 
 	// Phase 1: collect entries sequentially (filesystem metadata only, no I/O).
@@ -46,6 +50,9 @@ func WalkDir(dirPath string) ([]FileMeta, error) {
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if info.IsDir() {
 			return nil
@@ -80,11 +87,14 @@ func WalkDir(dirPath string) ([]FileMeta, error) {
 	}
 	close(jobCh)
 
-	g, _ := errgroup.WithContext(context.Background())
+	g, gCtx := errgroup.WithContext(ctx)
 
 	for w := 0; w < concurrency; w++ {
 		g.Go(func() error {
 			for j := range jobCh {
+				if gCtx.Err() != nil {
+					return gCtx.Err()
+				}
 				fh, err := os.Open(j.entry.absPath)
 				if err != nil {
 					return err
@@ -192,7 +202,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	defer conn.CloseWithError(0, "done")
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
-	files, err := WalkDir(dirPath)
+	files, err := WalkDir(ctx, dirPath)
 	if err != nil {
 		return fmt.Errorf("walk dir: %w", err)
 	}
