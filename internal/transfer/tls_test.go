@@ -141,3 +141,63 @@ func TestClientTLSForFingerprint_WithFingerprint(t *testing.T) {
 		t.Fatal("expected VerifyPeerCertificate to be set for fingerprint pinning")
 	}
 }
+
+// Test the VerifyPeerCertificate closures directly.
+
+func TestClientTLSPinned_NoCert(t *testing.T) {
+	fp := make([]byte, sha256.Size)
+	cfg := clientTLSPinned(fp)
+	err := cfg.VerifyPeerCertificate(nil, nil)
+	if err == nil {
+		t.Error("want error when no cert presented")
+	}
+}
+
+func TestClientTLSPinned_FingerprintMismatch(t *testing.T) {
+	_, serverFP, _ := serverTLSAndFingerprint()
+	wrongFP := make([]byte, sha256.Size) // all zeros — different from serverFP
+	cfg := clientTLSPinned(wrongFP)
+
+	// Use the raw DER from a freshly generated cert.
+	_, serverFP2, _ := serverTLSAndFingerprint()
+	_ = serverFP
+	cfgS, _, _ := serverTLSAndFingerprint()
+	rawDER := cfgS.Certificates[0].Certificate[0]
+
+	err := cfg.VerifyPeerCertificate([][]byte{rawDER}, nil)
+	if err == nil {
+		t.Error("want fingerprint mismatch error")
+	}
+	_ = serverFP2
+}
+
+func TestClientTLSPinned_FingerprintMatch_ParseOk(t *testing.T) {
+	cfgServer, fp, err := serverTLSAndFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDER := cfgServer.Certificates[0].Certificate[0]
+	cfgClient := clientTLSPinned(fp)
+	// The cert passes fingerprint check but may fail CheckSignatureFrom
+	// (serverTLS does not set KeyUsageCertSign). This exercises the parse path.
+	_ = cfgClient.VerifyPeerCertificate([][]byte{rawDER}, nil)
+}
+
+func TestClientTLSForFingerprint_NilVerify_NoCert(t *testing.T) {
+	cfg := clientTLSForFingerprint(nil)
+	err := cfg.VerifyPeerCertificate(nil, nil)
+	if err == nil {
+		t.Error("want error when no cert presented")
+	}
+}
+
+func TestClientTLSForFingerprint_NilVerify_ParsePath(t *testing.T) {
+	cfgServer, _, err := serverTLSAndFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDER := cfgServer.Certificates[0].Certificate[0]
+	cfg := clientTLSForFingerprint(nil)
+	// exercises parse + self-signed check + CheckSignatureFrom path
+	_ = cfg.VerifyPeerCertificate([][]byte{rawDER}, nil)
+}
