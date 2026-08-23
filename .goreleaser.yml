@@ -27,23 +27,49 @@ builds:
 
 archives:
   - id: meshdrop
+    builds:
+      - meshdrop
     name_template: "meshdrop-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - LICENSE
       - README.md
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+    args: ["$artifact", "--file", "$document", "--output", "spdx-json"]
+
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+release:
+  github:
+    owner: flipslidersand-labs
+    name: mesh-drop
+  draft: false
+  prerelease: auto
+  make_latest: true
 
 changelog:
+  use: github
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - Merge pull request
-      - Merge branch
+      - "^chore\\(deps\\)"
+      - "^Merge"
