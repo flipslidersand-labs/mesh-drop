@@ -222,7 +222,7 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		IsBatch:    true,
 		Compressed: compressed,
 		CompLevel:  compLevel,
-		NoResume:   noResume,
+		NoResume:   noResume, // 受信側に DirDone 計算をスキップさせる (#255)
 	}
 	// ディレクトリ転送でも ResumeState(DirDone) を受け取る (#247)
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
