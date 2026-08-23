@@ -144,7 +144,9 @@ func TestReadResumeState_TruncatedLength(t *testing.T) {
 func TestReadResumeState_MalformedJSON(t *testing.T) {
 	payload := []byte(`{INVALID}`)
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(len(payload)))
+	if err := binary.Write(&buf, binary.BigEndian, uint32(len(payload))); err != nil {
+		t.Fatal(err)
+	}
 	buf.Write(payload)
 	_, err := readResumeState(&buf)
 	if err == nil {
@@ -154,7 +156,9 @@ func TestReadResumeState_MalformedJSON(t *testing.T) {
 
 func TestReadResumeState_LengthExceedsMax(t *testing.T) {
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(maxMetaLength+1))
+	if err := binary.Write(&buf, binary.BigEndian, uint32(maxMetaLength+1)); err != nil {
+		t.Fatal(err)
+	}
 	_, err := readResumeState(&buf)
 	if err == nil {
 		t.Fatal("expected error for length exceeding max, got nil")
@@ -185,7 +189,9 @@ func TestWriteReadResumeState_Roundtrip(t *testing.T) {
 func TestReadResumeState_TruncatedBody(t *testing.T) {
 	payload := []byte(`{"dir_done":["a.txt"]}`)
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(len(payload)+10))
+	if err := binary.Write(&buf, binary.BigEndian, uint32(len(payload)+10)); err != nil {
+		t.Fatal(err)
+	}
 	buf.Write(payload) // shorter than declared length
 	_, err := readResumeState(&buf)
 	if err == nil {
