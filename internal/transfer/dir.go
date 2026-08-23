@@ -472,6 +472,10 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if cm.FileIndex < 0 || cm.FileIndex >= len(handles) {
 		return fmt.Errorf("invalid FileIndex %d (valid range: 0..%d)", cm.FileIndex, len(handles)-1)
 	}
+	// 完了済みファイルのハンドルは f==nil (#256)
+	if handles[cm.FileIndex].f == nil {
+		return fmt.Errorf("chunk %d: file index %d is already complete, unexpected chunk received", cm.Index, cm.FileIndex)
+	}
 	if cm.Offset < 0 || cm.Size < 0 {
 		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
 	}
