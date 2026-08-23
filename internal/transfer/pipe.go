@@ -13,7 +13,7 @@ import (
 // SendPipe は os.Stdin を QUIC ストリームで送信する。
 // サイズ不明のためチャンク数は1固定。
 func SendPipe(ctx context.Context, addr string) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), nil)
+	conn, err := quic.DialAddr(ctx, addr, clientTLS(), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -22,7 +22,7 @@ func SendPipe(ctx context.Context, addr string) error {
 
 // SendPipeNAT は NAT Traversal 済みソケット経由で stdin を送信する。
 func SendPipeNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), nil)
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
@@ -64,7 +64,7 @@ func ListenPipe(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	ln, err := quic.ListenAddr(addr, tlsConf, nil)
+	ln, err := quic.ListenAddr(addr, tlsConf, quicConfig())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
@@ -84,7 +84,7 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	if err != nil {
 		return fmt.Errorf("TLS setup: %w", err)
 	}
-	ln, err := quic.Listen(udpConn, tlsConf, nil)
+	ln, err := quic.Listen(udpConn, tlsConf, quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
