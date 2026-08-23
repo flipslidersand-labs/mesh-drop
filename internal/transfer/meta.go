@@ -19,9 +19,9 @@ type Meta struct {
 	Files      []FileMeta `json:"files,omitempty"`    // nil = single-file mode
 	IsBatch    bool       `json:"is_batch,omitempty"`
 	IsPipe     bool       `json:"is_pipe,omitempty"`
+	NoResume   bool       `json:"no_resume,omitempty"` // 受信側に DirDone 計算をスキップさせる (#255)
 	Compressed bool       `json:"compressed,omitempty"` // チャンクを zstd 圧縮する
 	CompLevel  int        `json:"comp_level,omitempty"` // 0=default(3), 1-9
-	NoResume   bool       `json:"no_resume,omitempty"`  // 送信側が resume を無効化 (#255)
 }
 
 // FileMeta はバッチ転送時の個別ファイル情報。
