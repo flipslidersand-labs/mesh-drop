@@ -192,9 +192,12 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 
 	if meta.IsBatch {
 		// ディレクトリ: 既存ファイルをハッシュ検証して完了済みリストを送信側へ返す (#245)
-		dirDone := checkDirDone(outDir, meta.Files)
-		rs := ResumeState{DirDone: dirDone}
-		_ = writeResumeState(ns, rs)
+		// meta.NoResume=true のときは checkDirDone をスキップして空リストを返す (#255)
+		var dirDone []string
+		if !meta.NoResume {
+			dirDone = checkDirDone(outDir, meta.Files)
+		}
+		_ = writeResumeState(ns, ResumeState{DirDone: dirDone})
 		return meta, nil, peerKey, dirDone, nil
 	}
 
