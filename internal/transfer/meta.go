@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"unicode"
+	"unicode/utf8"
 )
 
 // Meta はコントロールストリームで送信するファイル全体情報。
@@ -126,12 +126,15 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 	return m, json.Unmarshal(buf, &m)
 }
 
-// sanitizeName rejects filenames containing null bytes or ASCII/Unicode control
-// characters that could corrupt terminals, logs, or filesystem operations.
-func sanitizeName(name string) error {
-	for _, r := range name {
-		if r == 0 || unicode.IsControl(r) {
-			return fmt.Errorf("file name contains invalid character %q", r)
+// sanitizeName は名前文字列に制御文字・null バイト・不正 UTF-8 が含まれないかを検証する。
+// ログ汚染やファイルシステムの予期しない挙動を防ぐ (#325)。
+func sanitizeName(s string) error {
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("name contains invalid UTF-8: %q", s)
+	}
+	for i, r := range s {
+		if r == utf8.RuneError || r < 0x20 || r == 0x7f {
+			return fmt.Errorf("name contains control character at byte %d: %q", i, s)
 		}
 	}
 	return nil
@@ -153,8 +156,9 @@ func readMeta(r io.Reader) (Meta, error) {
 	if err := json.Unmarshal(buf, &m); err != nil {
 		return Meta{}, err
 	}
+	// #325: 制御文字・null バイト・不正 UTF-8 を拒否する
 	if err := sanitizeName(m.Name); err != nil {
-		return Meta{}, err
+		return Meta{}, fmt.Errorf("meta.Name: %w", err)
 	}
 	if !m.IsPipe {
 		if m.Size < 0 || m.Size > maxFileSize {
@@ -174,6 +178,10 @@ func readMeta(r io.Reader) (Meta, error) {
 	for i, f := range m.Files {
 		if f.Size < 0 || f.Size > maxFileSize {
 			return Meta{}, fmt.Errorf("files[%d].Size out of range: %d", i, f.Size)
+		}
+		// #325: FileMeta.Path も同様に制御文字を拒否する
+		if err := sanitizeName(f.Path); err != nil {
+			return Meta{}, fmt.Errorf("files[%d].Path: %w", i, err)
 		}
 	}
 	return m, nil
