@@ -7,11 +7,11 @@ require (
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/klauspost/compress v1.19.2
 	github.com/quic-go/quic-go v0.60.0
-	github.com/schollz/progressbar/v3 v3.19.0
+	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.51.0
 	golang.org/x/sync v0.22.0
-	golang.org/x/term v0.43.0
+	golang.org/x/term v0.44.0
 	golang.org/x/time v0.15.0
 	lukechampine.com/blake3 v1.4.1
 )
@@ -25,5 +25,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 )
