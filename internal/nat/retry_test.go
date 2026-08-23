@@ -106,6 +106,20 @@ func TestCreateSession_Retries503(t *testing.T) {
 	}
 }
 
+func TestPermanentError_ErrorAndUnwrap(t *testing.T) {
+	inner := errors.New("underlying cause")
+	pe := &permanentError{err: inner}
+	if pe.Error() != "underlying cause" {
+		t.Errorf("Error() = %q, want %q", pe.Error(), "underlying cause")
+	}
+	if pe.Unwrap() != inner {
+		t.Errorf("Unwrap() = %v, want %v", pe.Unwrap(), inner)
+	}
+	if !errors.Is(pe, inner) {
+		t.Error("errors.Is(pe, inner) should be true")
+	}
+}
+
 func TestCreateSession_NoPermanentRetryOn4xx(t *testing.T) {
 	calls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

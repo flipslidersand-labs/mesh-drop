@@ -528,3 +528,32 @@ func TestWebUIRateLimit(t *testing.T) {
 		t.Fatalf("expected 429 after burst exhausted, got %d", lastCode)
 	}
 }
+
+func TestHandlePeers_CancelledContext(t *testing.T) {
+	s := New("127.0.0.1:0", 50*time.Millisecond)
+	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+	// Use an already-cancelled context so Browse returns immediately with error.
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	s.handlePeers(rr, req)
+	// Browse returns context error → 500 or empty list; either is acceptable.
+	// The test just ensures the error path is reached without panic.
+}
+
+// TestRateLimiterMiddleware_MalformedAddr ensures the fallback ip=RemoteAddr
+// path is exercised when RemoteAddr has no port (SplitHostPort returns error).
+func TestRateLimiterMiddleware_MalformedAddr(t *testing.T) {
+	rl := newRateLimiter()
+	handler := rl.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.168.1.1" // no port — causes SplitHostPort error
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}

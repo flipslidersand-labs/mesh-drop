@@ -20,6 +20,43 @@ func TestPeerAddr_FallbackHost(t *testing.T) {
 	}
 }
 
+func TestHexDecodeFingerprint_Valid(t *testing.T) {
+	b, err := hexDecodeFingerprint("deadbeef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0xde, 0xad, 0xbe, 0xef}
+	for i, v := range want {
+		if b[i] != v {
+			t.Errorf("byte[%d]: got %02x want %02x", i, b[i], v)
+		}
+	}
+}
+
+func TestHexDecodeFingerprint_OddLength(t *testing.T) {
+	_, err := hexDecodeFingerprint("abc")
+	if err == nil {
+		t.Error("want error for odd-length input")
+	}
+}
+
+func TestHexDecodeFingerprint_InvalidChar(t *testing.T) {
+	_, err := hexDecodeFingerprint("ZZ")
+	if err == nil {
+		t.Error("want error for invalid hex char")
+	}
+}
+
+func TestHexDecodeFingerprint_UpperCase(t *testing.T) {
+	b, err := hexDecodeFingerprint("DEADBEEF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b[0] != 0xde {
+		t.Errorf("expected 0xde got %02x", b[0])
+	}
+}
+
 func TestBrowse_ReturnsWithinTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
