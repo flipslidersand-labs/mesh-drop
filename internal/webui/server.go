@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -199,6 +200,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer is required", http.StatusBadRequest)
 		return
 	}
+	if _, _, err := net.SplitHostPort(peerAddr); err != nil {
+		http.Error(w, "peer must be host:port", http.StatusBadRequest)
+		return
+	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -315,6 +320,10 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	peerAddr := r.FormValue("peer")
 	if peerAddr == "" {
 		http.Error(w, "peer is required", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := net.SplitHostPort(peerAddr); err != nil {
+		http.Error(w, "peer must be host:port", http.StatusBadRequest)
 		return
 	}
 	fileHeaders := r.MultipartForm.File["files"]
