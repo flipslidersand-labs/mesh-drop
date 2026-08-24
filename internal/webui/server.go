@@ -26,22 +26,36 @@ import (
 var staticFiles embed.FS
 
 // rateLimiter manages per-IP token-bucket limiters.
+// lastSeen tracks the most recent request time per IP so that evict can
+// remove only idle entries rather than resetting all buckets at once.
 type rateLimiter struct {
 	mu       sync.Mutex
 	visitors map[string]*rate.Limiter
+	lastSeen map[string]time.Time
 }
 
-func newRateLimiter() *rateLimiter {
-	rl := &rateLimiter{visitors: make(map[string]*rate.Limiter)}
-	go rl.evict()
+// idleTimeout is how long an IP must be silent before its limiter is evicted.
+const idleTimeout = 5 * time.Minute
+
+// newRateLimiter creates a rateLimiter and starts the background eviction
+// goroutine.  The goroutine stops when ctx is cancelled, preventing goroutine
+// leaks after the Server is shut down.
+func newRateLimiter(ctx context.Context) *rateLimiter {
+	rl := &rateLimiter{
+		visitors: make(map[string]*rate.Limiter),
+		lastSeen: make(map[string]time.Time),
+	}
+	go rl.evict(ctx)
 	return rl
 }
 
 // getVisitor returns (creating if necessary) a Limiter for the given IP.
 // Configured at 30 req/min (one token every 2 s) with a burst of 10.
+// lastSeen is updated on every access so that active IPs are not evicted.
 func (rl *rateLimiter) getVisitor(ip string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	rl.lastSeen[ip] = time.Now()
 	if lim, ok := rl.visitors[ip]; ok {
 		return lim
 	}
@@ -50,14 +64,27 @@ func (rl *rateLimiter) getVisitor(ip string) *rate.Limiter {
 	return lim
 }
 
-// evict clears all visitor entries every minute to prevent unbounded growth.
-func (rl *rateLimiter) evict() {
+// evict removes only IP entries that have been idle for longer than
+// idleTimeout.  This preserves the token-bucket state of active IPs so that
+// rate limiting is not inadvertently reset.  The goroutine exits when ctx is
+// cancelled, eliminating the goroutine leak that existed previously.
+func (rl *rateLimiter) evict(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
-	for range t.C {
-		rl.mu.Lock()
-		rl.visitors = make(map[string]*rate.Limiter)
-		rl.mu.Unlock()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			rl.mu.Lock()
+			for ip, ts := range rl.lastSeen {
+				if now.Sub(ts) > idleTimeout {
+					delete(rl.visitors, ip)
+					delete(rl.lastSeen, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
 	}
 }
 
@@ -225,7 +252,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go s.runReceiver(ctx, recvDir)
 
-	rl := newRateLimiter()
+	rl := newRateLimiter(ctx)
 
 	mux := http.NewServeMux()
 
