@@ -94,6 +94,9 @@ func (s *NoiseStream) Write(p []byte) (int, error) {
 func (s *NoiseStream) Read(p []byte) (int, error) {
 	if len(s.rbuf) > 0 {
 		n := copy(p, s.rbuf)
+		// #482: zero the consumed portion before advancing the slice so that
+		// decrypted plaintext does not linger in the backing array.
+		zeroBytes(s.rbuf[:n])
 		s.rbuf = s.rbuf[n:]
 		return n, nil
 	}
