@@ -14,6 +14,29 @@ import (
 
 // --- #295: handleDownload ---
 
+// TestHandleDownload_MethodNotAllowed verifies that POST/PUT/DELETE are rejected (#485).
+func TestHandleDownload_MethodNotAllowed(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.dlMu.Lock()
+	s.downloads["mid"] = path
+	s.dlMu.Unlock()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req := httptest.NewRequest(method, "/api/downloads/mid", nil)
+		rr := httptest.NewRecorder()
+		s.handleDownload(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("method %s: expected 405, got %d", method, rr.Code)
+		}
+	}
+}
+
 func TestHandleDownload_NotFound(t *testing.T) {
 	s := New("127.0.0.1:0", time.Second)
 	req := httptest.NewRequest(http.MethodGet, "/api/downloads/nonexistent", nil)

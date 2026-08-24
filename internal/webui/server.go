@@ -640,6 +640,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // handleDownload serves a received file for browser download.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
 	s.dlMu.RLock()
 	path, ok := s.downloads[id]
