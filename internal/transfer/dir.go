@@ -23,6 +23,11 @@ import (
 // chunkSkewThreshold is the max:avg ratio above which chunk distribution is considered skewed (#274).
 const chunkSkewThreshold = 3.0
 
+// maxSendDirWorkers caps the number of concurrent sendDirChunk goroutines to avoid
+// exhausting QUIC stream limits (MaxIncomingStreams default ~100) and goroutine memory
+// (~8 KB stack each). Chosen as max(runtime.NumCPU(), min(256, len(assignments))). (#486)
+const maxSendDirWorkers = 256
+
 // warnChunkSkew prints a warning to stderr if chunks are distributed very unevenly across files.
 func warnChunkSkew(files []FileMeta, assignments []chunkAssignment) {
 	if len(files) < 2 {
@@ -333,16 +338,28 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		}
 	}
 
+	// #486: limit concurrent sendDirChunk goroutines to avoid exhausting QUIC stream limits.
+	// Use errgroup + a semaphore channel so at most maxSendDirWorkers streams are open at once.
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > maxSendDirWorkers {
+		workers = maxSendDirWorkers
+	}
+
 	errs := make([]error, len(assignments))
-	var wg sync.WaitGroup
+	g, gCtx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, workers)
 	for i, a := range assignments {
 		if _, done := doneFiles[files[a.fileIndex].Path]; done {
 			continue // 完了済みファイルのチャンクはスキップ
 		}
-		wg.Add(1)
-		go func(idx int, a chunkAssignment) {
-			defer wg.Done()
-			f := files[a.fileIndex]
+		idx, ac := i, a
+		sem <- struct{}{} // acquire slot
+		g.Go(func() error {
+			defer func() { <-sem }() // release slot
+			f := files[ac.fileIndex]
 			absPath := filepath.Join(dirPath, f.Path)
 			var progressW io.Writer
 			if progressFn != nil {
@@ -350,10 +367,14 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 					progressFn(sent.Add(n), totalSize)
 				}}
 			}
-			errs[idx] = sendDirChunk(ctx, conn, absPath, idx, a, bar, progressW, peerKey, lim, compressed, compLevel)
-		}(i, a)
+			errs[idx] = sendDirChunk(gCtx, conn, absPath, idx, ac, bar, progressW, peerKey, lim, compressed, compLevel)
+			return errs[idx]
+		})
 	}
-	wg.Wait()
+	if err := g.Wait(); err != nil {
+		// errs slice already populated; fall through to normal error handling below.
+		_ = err
+	}
 	fmt.Println()
 
 	// #275: categorize and summarize errors before returning

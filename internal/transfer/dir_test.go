@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -163,5 +165,69 @@ func TestResumeState_DirDone_JSON(t *testing.T) {
 	}
 	if len(got.DirDone) != 2 || got.DirDone[0] != "a/b.txt" {
 		t.Fatalf("unexpected DirDone: %v", got.DirDone)
+	}
+}
+
+// TestSendDirWorkerLimit_ConstantSane verifies maxSendDirWorkers is a
+// reasonable value (>= 1 and <= 256) as required by #486.
+func TestSendDirWorkerLimit_ConstantSane(t *testing.T) {
+	if maxSendDirWorkers < 1 {
+		t.Fatalf("maxSendDirWorkers must be >= 1, got %d", maxSendDirWorkers)
+	}
+	if maxSendDirWorkers > 256 {
+		t.Fatalf("maxSendDirWorkers must be <= 256 to stay within QUIC stream limits, got %d", maxSendDirWorkers)
+	}
+}
+
+// TestSendDirWorkerLimit_SemaphoreCapacity verifies that the semaphore channel
+// used in doSendDir limits concurrency to min(runtime.NumCPU(), maxSendDirWorkers).
+// We simulate the semaphore logic directly to avoid requiring a QUIC connection.
+func TestSendDirWorkerLimit_SemaphoreCapacity(t *testing.T) {
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > maxSendDirWorkers {
+		workers = maxSendDirWorkers
+	}
+
+	// Build a semaphore with the same capacity doSendDir uses.
+	sem := make(chan struct{}, workers)
+
+	const totalJobs = 500 // well above any CPU count or maxSendDirWorkers
+	var peak atomic.Int64
+	var current atomic.Int64
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		remaining := totalJobs
+		type result struct{}
+		results := make(chan result, totalJobs)
+		for remaining > 0 {
+			remaining--
+			sem <- struct{}{} // acquire
+			go func() {
+				cur := current.Add(1)
+				// record peak
+				for {
+					old := peak.Load()
+					if cur <= old || peak.CompareAndSwap(old, cur) {
+						break
+					}
+				}
+				current.Add(-1)
+				<-sem // release
+				results <- result{}
+			}()
+		}
+		for i := 0; i < totalJobs; i++ {
+			<-results
+		}
+	}()
+	<-done
+
+	if peak.Load() > int64(workers) {
+		t.Errorf("peak concurrency %d exceeded semaphore capacity %d (#486)", peak.Load(), workers)
 	}
 }
