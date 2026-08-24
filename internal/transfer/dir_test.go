@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -296,5 +297,44 @@ func TestSendDirWorkerLimit_SemaphoreCapacity(t *testing.T) {
 
 	if peak.Load() > int64(workers) {
 		t.Errorf("peak concurrency %d exceeded semaphore capacity %d (#486)", peak.Load(), workers)
+	}
+}
+
+// TestSendDirChunk_SectionReaderPattern verifies that sendDirChunk reads the
+// correct byte range from a pre-opened *os.File using io.NewSectionReader /
+// ReadAt semantics (#483: no per-chunk open/seek).
+func TestSendDirChunk_SectionReaderPattern(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte("AAAAABBBBBCCCCC") // 15 bytes, 3 x 5-byte regions
+	fpath := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(fpath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(fpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	// SectionReader covering the middle 5 bytes ("BBBBB").
+	sr := io.NewSectionReader(f, 5, 5)
+	got := make([]byte, 5)
+	n, err := sr.Read(got)
+	if err != nil && err != io.EOF {
+		t.Fatalf("SectionReader.Read: %v", err)
+	}
+	if n != 5 || string(got) != "BBBBB" {
+		t.Fatalf("expected BBBBB, got %q (%d bytes)", got, n)
+	}
+
+	// ReadAt is concurrency-safe — no seek required.
+	got2 := make([]byte, 5)
+	n2, err2 := f.ReadAt(got2, 10)
+	if err2 != nil && err2 != io.EOF {
+		t.Fatalf("ReadAt: %v", err2)
+	}
+	if n2 != 5 || string(got2) != "CCCCC" {
+		t.Fatalf("ReadAt expected CCCCC, got %q (%d bytes)", got2, n2)
 	}
 }

@@ -338,8 +338,31 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		}
 	}
 
-	// #486: limit concurrent sendDirChunk goroutines to avoid exhausting QUIC stream limits.
-	// Use errgroup + a semaphore channel so at most maxSendDirWorkers streams are open at once.
+	// #483: pre-open each file once; sendDirChunk uses SectionReader+ReadAt (no per-chunk seek).
+	openedFiles := make(map[int]*os.File, len(files))
+	for _, a := range assignments {
+		if _, done := doneFiles[files[a.fileIndex].Path]; done {
+			continue
+		}
+		if _, already := openedFiles[a.fileIndex]; already {
+			continue
+		}
+		fh, ferr := os.Open(filepath.Join(dirPath, files[a.fileIndex].Path))
+		if ferr != nil {
+			for _, of := range openedFiles {
+				of.Close() //nolint:errcheck
+			}
+			return ferr
+		}
+		openedFiles[a.fileIndex] = fh
+	}
+	defer func() {
+		for _, of := range openedFiles {
+			of.Close() //nolint:errcheck
+		}
+	}()
+
+	// #486: limit concurrent goroutines to avoid exhausting QUIC stream limits.
 	workers := runtime.NumCPU()
 	if workers < 1 {
 		workers = 1
@@ -359,15 +382,13 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		sem <- struct{}{} // acquire slot
 		g.Go(func() error {
 			defer func() { <-sem }() // release slot
-			f := files[ac.fileIndex]
-			absPath := filepath.Join(dirPath, f.Path)
 			var progressW io.Writer
 			if progressFn != nil {
 				progressW = &countWriter{fn: func(n int64) {
 					progressFn(sent.Add(n), totalSize)
 				}}
 			}
-			errs[idx] = sendDirChunk(gCtx, conn, absPath, idx, ac, bar, progressW, peerKey, lim, compressed, compLevel)
+			errs[idx] = sendDirChunk(gCtx, conn, openedFiles[ac.fileIndex], idx, ac, bar, progressW, peerKey, lim, compressed, compLevel)
 			return errs[idx]
 		})
 	}
@@ -412,7 +433,10 @@ func (cw *countWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int, a chunkAssignment, bar io.Writer, progressW io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+// sendDirChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
+// #483: f は呼び出し元で一度だけ open された *os.File。
+// sendChunk と同じく io.NewSectionReader + ReadAt を使うため seek 不要で並列安全。
+func sendDirChunk(ctx context.Context, conn *quic.Conn, f *os.File, idx int, a chunkAssignment, bar io.Writer, progressW io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
@@ -429,15 +453,10 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 		return fmt.Errorf("chunk %d meta: %w", idx, err)
 	}
 
-	f, err := os.Open(absPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Seek(a.offset, io.SeekStart); err != nil {
-		return err
-	}
-	src := NewThrottledReader(ctx, io.LimitReader(f, a.size), lim)
+	// #483: SectionReader で offset/size をストリーミング送信。
+	// ReadAt ベースなので concurrent-safe かつ seek 不要。sendChunk と同一パターン。
+	sr := io.NewSectionReader(f, a.offset, a.size)
+	src := NewThrottledReader(ctx, sr, lim)
 
 	// #317: progressW が nil でない場合は bar と合わせてバイト数を通知する
 	teeTarget := io.Writer(bar)
@@ -456,7 +475,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 		}
 		return err
 	}
-	_, err = io.CopyN(io.MultiWriter(ns, teeTarget), src, a.size)
+	_, err = io.Copy(io.MultiWriter(ns, teeTarget), src)
 	return err
 }
 
