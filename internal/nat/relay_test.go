@@ -436,3 +436,42 @@ func TestRelayPerIPSessionLimit_Decrement(t *testing.T) {
 		t.Errorf("expected ipSessions=1 after rendezvous, got %d", after)
 	}
 }
+
+// TestHandleJoin_SecondPeerAfterTimeout は #478 のタイムアウト競合を再現するテスト。
+// 受信側が joinWaitTimeout でタイムアウトした後に到着した送信側ピアが
+// 410 Gone を受け取り、ランデブー成功と誤判定しないことを確認する。
+func TestHandleJoin_SecondPeerAfterTimeout(t *testing.T) {
+	srv := NewRelayServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// セッションを直接作成し、done を即座に close することでタイムアウト済み状態を再現する。
+	sess := &rdv{
+		chB:       make(chan string, 1),
+		done:      make(chan struct{}),
+		createdAt: time.Now(),
+		creatorIP: "127.0.0.1",
+		// addrA に受信側アドレスを設定済み → 次の POST は2番目のピア（送信側）として扱われる
+		addrA: "1.2.3.4:40000",
+	}
+	const code = "EXPIREDSESS00"
+	srv.mu.Lock()
+	// 競合ウィンドウを再現: マップには残しているが done は close 済み
+	// (受信側が joinWaitTimeout でタイムアウトして closeDone() を呼んだ直後の状態)
+	srv.sessions[code] = sess
+	srv.mu.Unlock()
+	sess.closeDone() // 受信側タイムアウト相当: done を close する
+
+	// 送信側ピアが期限切れセッションに POST する
+	resp, err := http.Post(ts.URL+"/session/"+code, "text/plain", strings.NewReader("9.9.9.9:5555"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// #478 修正前: sess.chB (バッファ1) に書き込んで 200 OK を返していた
+	// #478 修正後: sess.done が close 済みなので 410 Gone を返す
+	if resp.StatusCode != http.StatusGone {
+		t.Errorf("expected 410 Gone for expired session, got %d", resp.StatusCode)
+	}
+}

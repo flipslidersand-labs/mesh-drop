@@ -524,7 +524,24 @@ func (s *RelayServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// 2番目の登録 (送信側): 受信側を即時解除してピアアドレスを交換
 		peerAddr = peerAddrA
-		sess.chB <- myAddr
+		// #478: chB への送信前に sess.done を優先的に確認する。
+		// 受信側が joinWaitTimeout でタイムアウトして delete(sessions)+closeDone() を実行した後に
+		// 送信側が chB (バッファサイズ1) へ書き込めてしまう競合ウィンドウを閉じる。
+		// done が close 済みなら 410 Gone を返してランデブー成功の誤判定を防ぐ。
+		// 注意: select は複数ケースが同時に ready の場合ランダムに選択するため、
+		// done の確認を先行する非ブロッキング select で行い、確定後に chB へ送信する。
+		select {
+		case <-sess.done:
+			http.Error(w, "session expired", http.StatusGone)
+			return
+		default:
+		}
+		select {
+		case sess.chB <- myAddr:
+		case <-sess.done:
+			http.Error(w, "session expired", http.StatusGone)
+			return
+		}
 		// #328: ランデブー完了時に duration を記録
 		if !sess.createdAt.IsZero() {
 			ns := time.Since(sess.createdAt).Nanoseconds()
