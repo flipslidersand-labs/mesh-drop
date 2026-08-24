@@ -74,8 +74,14 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 }
 
 // receiveFileToPath receives a single file into a private temp dir then renames it to outPath.
+// The temp dir is created in the same directory as outPath so that os.Rename is an atomic
+// same-filesystem move and never triggers EXDEV on cross-device paths (e.g. Docker volumes).
 func receiveFileToPath(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outPath string) error {
-	recvDir, err := os.MkdirTemp("", "meshdrop-recv1-*")
+	destDir := filepath.Dir(outPath)
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	recvDir, err := os.MkdirTemp(destDir, "meshdrop-recv1-*")
 	if err != nil {
 		return fmt.Errorf("mkdir temp: %w", err)
 	}
@@ -86,8 +92,5 @@ func receiveFileToPath(ctx context.Context, conn *quic.Conn, meta Meta, cp *chec
 	}
 
 	src := filepath.Join(recvDir, filepath.Base(meta.Name))
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return err
-	}
 	return os.Rename(src, outPath)
 }
