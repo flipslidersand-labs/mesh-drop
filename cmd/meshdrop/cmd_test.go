@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -219,5 +220,71 @@ func TestLoadConfig_Cached(t *testing.T) {
 	_ = loadConfig() // second call should return cached
 	if first != globalCfg {
 		t.Error("want same pointer on second call (cached)")
+	}
+}
+
+// --- initSessionOrWarn (#476) ---
+
+// errFakeInitFail は InitSession のテスト用失敗値。
+var errFakeInitFail = fmt.Errorf("fake InitSession failure")
+
+// TestInitSessionOrWarn_NonInteractive_NoAllowNoTOFU は #476 のリグレッションテスト。
+// 非対話的環境（TTY なし）で --allow-no-tofu が指定されていない場合、
+// initSessionOrWarn がエラーを返すことを確認する。
+func TestInitSessionOrWarn_NonInteractive_NoAllowNoTOFU(t *testing.T) {
+	origInit := initSessionFn
+	origTerm := isTerminal
+	origAllow := allowNoTOFU
+	t.Cleanup(func() {
+		initSessionFn = origInit
+		isTerminal = origTerm
+		allowNoTOFU = origAllow
+	})
+
+	// InitSession を常に失敗させる
+	initSessionFn = func() error { return errFakeInitFail }
+	// 非対話的環境をシミュレートする（TTY なし）
+	isTerminal = func() bool { return false }
+	allowNoTOFU = false
+
+	err := initSessionOrWarn()
+	if err == nil {
+		t.Error("want error in non-interactive environment without --allow-no-tofu, got nil")
+	}
+}
+
+// TestInitSessionOrWarn_NonInteractive_WithAllowNoTOFU は #476: --allow-no-tofu が
+// 指定された場合は非対話的環境でもエラーなしで継続できることを確認する。
+func TestInitSessionOrWarn_NonInteractive_WithAllowNoTOFU(t *testing.T) {
+	origInit := initSessionFn
+	origTerm := isTerminal
+	origAllow := allowNoTOFU
+	t.Cleanup(func() {
+		initSessionFn = origInit
+		isTerminal = origTerm
+		allowNoTOFU = origAllow
+	})
+
+	initSessionFn = func() error { return errFakeInitFail }
+	isTerminal = func() bool { return false }
+	allowNoTOFU = true
+
+	err := initSessionOrWarn()
+	if err != nil {
+		t.Errorf("want nil with --allow-no-tofu in non-interactive env, got: %v", err)
+	}
+}
+
+// TestInitSessionOrWarn_InitSuccess はセッション初期化が成功した場合に
+// 常に nil を返すことを確認する。
+func TestInitSessionOrWarn_InitSuccess(t *testing.T) {
+	origInit := initSessionFn
+	t.Cleanup(func() { initSessionFn = origInit })
+
+	initSessionFn = func() error { return nil }
+
+	err := initSessionOrWarn()
+	if err != nil {
+		t.Errorf("want nil when InitSession succeeds, got: %v", err)
 	}
 }
