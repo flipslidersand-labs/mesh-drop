@@ -37,7 +37,9 @@ func cmdUI() *cobra.Command {
 			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
 				port = globalCfg.Port
 			}
-			if !cmd.Flags().Changed("auth-token") && globalCfg.AuthToken != "" {
+			if cmd.Flags().Changed("auth-token") {
+				uiAuthToken = authToken
+			} else if globalCfg.AuthToken != "" {
 				uiAuthToken = globalCfg.AuthToken
 			}
 			return nil
@@ -47,7 +49,7 @@ func cmdUI() *cobra.Command {
 			url := fmt.Sprintf("http://%s", addr)
 
 			fmt.Printf("MeshDrop UI  →  %s\n", url)
-			if authToken != "" {
+			if uiAuthToken != "" {
 				fmt.Println("Authentication enabled (--auth-token).")
 			}
 			fmt.Println("Press Ctrl+C to stop.")
@@ -60,7 +62,7 @@ func cmdUI() *cobra.Command {
 			defer stop()
 
 			srv := webui.New(addr, discoverTimeout)
-			srv.AuthToken = authToken
+			srv.AuthToken = uiAuthToken
 			srv.HistPath = config.DataPath("history.json")
 			if err := srv.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
