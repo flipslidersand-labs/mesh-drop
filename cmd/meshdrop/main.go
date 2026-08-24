@@ -523,6 +523,7 @@ func discoverAll(ctx context.Context, timeout time.Duration) ([]discovery.Peer, 
 // マッチしなかった prefix は警告表示する。
 func filterPeers(peers []discovery.Peer, prefixes []string) []discovery.Peer {
 	var matched []discovery.Peer
+	seen := make(map[string]bool)
 	for _, prefix := range prefixes {
 		prefix = strings.TrimSpace(prefix)
 		if prefix == "" {
@@ -531,7 +532,10 @@ func filterPeers(peers []discovery.Peer, prefixes []string) []discovery.Peer {
 		found := false
 		for _, p := range peers {
 			if strings.HasPrefix(strings.ToLower(p.Name), strings.ToLower(prefix)) {
-				matched = append(matched, p)
+				if !seen[p.Name] {
+					matched = append(matched, p)
+					seen[p.Name] = true
+				}
 				found = true
 			}
 		}
