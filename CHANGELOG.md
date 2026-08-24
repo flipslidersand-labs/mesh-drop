@@ -14,6 +14,60 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [0.8.0] — 2026-08-25
+
+### Added
+- `feat(transfer)` E2E integrity verification with `--verify` flag (#450)
+- `feat(transfer)` Observability — throughput, resume stats, chunk skew, error counters (#451)
+- `feat(transfer)` QUIC+Noise handshake latency logging at debug level (#449)
+- `feat(transfer)` Named constants for QUIC idle timeout and keep-alive (#429)
+- `feat(transfer)` Progress callback from `doSendDir` for accurate WebUI progress (#441)
+- `feat(webui)` `elapsed_ms` / `speed_bps` / `eta_ms` fields in SSE ProgressEvent (#448)
+- `feat(webui)` Transfer history persisted to `~/.meshdrop/history.json` (#438)
+- `feat(cmd)` `meshdrop version --short` subcommand (#439)
+- `feat` Structured debug logging with `--verbose` / `-v` flag (#411)
+
+### Fixed
+- `fix(transfer)` `sendDirChunk`: pre-open files once with `SectionReader+ReadAt` — eliminates per-chunk open/seek (#500)
+- `fix(transfer)` Noise handshake propagates `context.Deadline` — prevents hang on slow peers (#501)
+- `fix(transfer)` `initSessionOrWarn` blocks in non-interactive mode without `--allow-no-tofu` (#499)
+- `fix(transfer)` `handleJoin` sender checks `done` before close — prevents false timeout judgment (#498)
+- `fix(transfer)` `evictIdleIPs` goroutine leak — stopped via context cancel (#497)
+- `fix(transfer)` `doSendDir` goroutine cap via `errgroup+semaphore` — prevents QUIC stream exhaustion (#496)
+- `fix(transfer)` `doReceiveDir` calls `closeConn` on error to unblock remaining goroutines (#493)
+- `fix(transfer)` `receiveFileToPath` uses same-FS `MkdirTemp` — eliminates `EXDEV` cross-device rename (#492)
+- `fix(transfer)` `NoiseStream.Read` zeros consumed `rbuf` slice before advancing (#491)
+- `fix(transfer)` `filterPeers` duplicate-prefix match — prevents multi-send to same peer (#488)
+- `fix(transfer)` Sender waits for receiver close before `CloseWithError`; TLS CA verification fix (#462)
+- `fix(relay)` `cmdRelay` rejects single `--cert`/`--key` flag without the other — was silently starting HTTP (#495)
+- `fix(relay)` Per-IP concurrent active session limit (#423)
+- `fix(webui)` `handleDownload` validates HTTP method (#494)
+- `fix(webui)` `ui` command respects `config.yaml` `auth_token` (#489)
+- `fix(cmd)` Validates `--all`/`--to` + `--relay` flag conflicts before file stat (#444)
+- `fix(config)` `filepath.ToSlash` in `TestDataPath_XDG` for Windows path compatibility (#463)
+- `fix(discovery)` Shows relay-mode hint on mDNS timeout (#431)
+- `fix(lint)` `errcheck` violations in `cmd_test.go` (#458)
+
+### Security
+- `security(transfer)` Fuzz `sanitizeName` + fix absolute-path and path-traversal bypass — cross-platform `/unix/path` check added (#435)
+
+### Performance
+- `perf(transfer)` Auto-skip zstd compression for already-compressed file formats (#440)
+
+### CI / DX
+- `ci` Windows build & test job in CI (#446)
+- `ci` Benchmark workflow with regression detection (#445, #459)
+- `ci` Coverage threshold 30 → 35 → 51% (#421, #466)
+- `docs` Relay server deployment guide (#442)
+- `ops` Dockerfile for relay server + `ghcr.io` publish on release (#415)
+
+### Deps
+- `chore(deps)` `quic-go` 0.61.0, `golang.org/x/crypto` 0.55.0, `cobra` 1.10.2, `progressbar` v3 latest
+- `chore(deps)` `golangci-lint-action` → v9, `goreleaser-action` → v7, `actions/checkout` → v7, `actions/setup-go` → v7
+- `chore(deps)` Docker actions: `login-action` v4, `build-push-action` v7, `metadata-action` v6
+
+---
+
 ## [0.7.0] — 2026-08-23
 
 ### Added
