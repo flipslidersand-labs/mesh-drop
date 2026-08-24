@@ -196,6 +196,26 @@ func TestIsTerminal_InTest(t *testing.T) {
 	_ = isTerminal()
 }
 
+// --- cmdRelay cert/key validation (#473) ---
+
+func TestCmdRelay_CertOnly(t *testing.T) {
+	cmd := cmdRelay()
+	cmd.SetArgs([]string{"--cert", "server.pem"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("want error when --cert is given without --key")
+	}
+}
+
+func TestCmdRelay_KeyOnly(t *testing.T) {
+	cmd := cmdRelay()
+	cmd.SetArgs([]string{"--key", "server.key"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("want error when --key is given without --cert")
+	}
+}
+
 // --- loadConfig ---
 
 func TestLoadConfig_NoFile(t *testing.T) {

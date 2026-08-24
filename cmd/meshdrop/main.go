@@ -730,6 +730,11 @@ func cmdRelay() *cobra.Command {
 		Use:   "relay",
 		Short: "Run a signaling relay server for NAT traversal",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// #473: --cert と --key は必ず対で指定する必要がある。
+			// 片方だけ指定された場合はバリデーションエラーを返す（無言の HTTP フォールバックを防ぐ）。
+			if (certFile == "") != (keyFile == "") {
+				return fmt.Errorf("--cert and --key must be specified together")
+			}
 			// --max-sessions が未設定の場合は MESHDROP_RELAY_MAX_SESSIONS 環境変数を参照する。
 			if !cmd.Flags().Changed("max-sessions") {
 				if v := os.Getenv("MESHDROP_RELAY_MAX_SESSIONS"); v != "" {
