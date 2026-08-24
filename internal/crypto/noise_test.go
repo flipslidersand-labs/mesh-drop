@@ -1,9 +1,12 @@
 package crypto
 
 import (
+	"context"
 	"io"
+	"net"
 	"sync"
 	"testing"
+	"time"
 )
 
 type rwPair struct {
@@ -240,5 +243,83 @@ func TestHandshakeFull_PeerStaticKey(t *testing.T) {
 	}
 	if string(respPeerStatic) != string(initKey.Public) {
 		t.Errorf("responder saw wrong peer key: got %x, want %x", respPeerStatic, initKey.Public)
+	}
+}
+
+// TestHandshakeInitiatorCtx_Timeout は悪意あるピア (応答しない) に対して
+// HandshakeInitiatorCtx がコンテキストの deadline 通りにタイムアウトすることを検証する (#479)。
+// net.Conn を使うことで applyHandshakeDeadline の SetDeadline パスを実際に走らせる。
+func TestHandshakeInitiatorCtx_Timeout(t *testing.T) {
+	// net.Pipe() は両端が net.Conn なので SetDeadline が機能する。
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	key, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 短い deadline を持つ ctx を渡す。ピア側は何も送らない。
+	deadline := time.Now().Add(150 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := HandshakeInitiatorCtx(ctx, client, key)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected timeout error, got nil")
+		}
+		// 実際の経過時間が deadline を大幅に超えていないことを確認する。
+		// (goroutine リークがなく正しく中断された証拠)
+		elapsed := time.Since(deadline)
+		if elapsed > 2*time.Second {
+			t.Errorf("handshake returned %v after deadline by %v — possible goroutine block", err, elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandshakeInitiatorCtx did not return after deadline — goroutine leaked")
+	}
+}
+
+// TestHandshakeResponderCtx_Timeout は悪意あるピア (応答しない) に対して
+// HandshakeResponderCtx がコンテキストの deadline 通りにタイムアウトすることを検証する (#479)。
+func TestHandshakeResponderCtx_Timeout(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	key, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(150 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		// responder は最初に recv を呼ぶので、クライアントが何も送らなければすぐにブロックする。
+		_, err := HandshakeResponderCtx(ctx, server, key)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected timeout error, got nil")
+		}
+		elapsed := time.Since(deadline)
+		if elapsed > 2*time.Second {
+			t.Errorf("handshake returned %v after deadline by %v — possible goroutine block", err, elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandshakeResponderCtx did not return after deadline — goroutine leaked")
 	}
 }

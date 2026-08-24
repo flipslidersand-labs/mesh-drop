@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -176,7 +177,7 @@ func TestChunkHandshake_PeerKeyMismatch_Initiator(t *testing.T) {
 	}()
 
 	// Initiator expects wrongExpectedKey but the responder uses actualResponderKey.
-	_, initErr := chunkHandshakeInitiator(a, wrongExpectedKey.Public)
+	_, initErr := chunkHandshakeInitiator(context.Background(), a, wrongExpectedKey.Public)
 	<-errCh // wait for responder goroutine to finish
 
 	if initErr == nil {
@@ -214,7 +215,7 @@ func TestChunkHandshake_PeerKeyMismatch_Responder(t *testing.T) {
 	}()
 
 	// Responder expects wrongExpectedKey but initiator uses actualInitiatorKey.
-	_, respErr := chunkHandshakeResponder(b, wrongExpectedKey.Public)
+	_, respErr := chunkHandshakeResponder(context.Background(), b, wrongExpectedKey.Public)
 	<-errCh
 
 	if respErr == nil {

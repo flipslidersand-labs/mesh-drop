@@ -189,7 +189,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	}
 	defer stream.Close()
 
-	ns, peerKey, err := controlHandshakeResponder(stream)
+	ns, peerKey, err := controlHandshakeResponder(ctx, stream)
 	if err != nil {
 		return Meta{}, nil, nil, nil, err
 	}
@@ -433,7 +433,7 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 	defer stream.Close()
 
 	tNoise := time.Now()
-	ns, peerKey, err := controlHandshakeInitiator(stream)
+	ns, peerKey, err := controlHandshakeInitiator(ctx, stream)
 	if err != nil {
 		return ResumeState{}, nil, err
 	}
@@ -663,7 +663,7 @@ func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offs
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeInitiator(stream, peerKey)
+	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk %d noise: %w", index, err)
 	}
@@ -722,7 +722,7 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeResponder(stream, peerKey)
+	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk noise: %w", err)
 	}
