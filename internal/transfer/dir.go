@@ -398,7 +398,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, absPath string, idx int,
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeInitiator(stream, peerKey)
+	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk %d noise: %w", idx, err)
 	}
@@ -681,7 +681,7 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeResponder(stream, peerKey)
+	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("chunk noise: %w", err)
 	}

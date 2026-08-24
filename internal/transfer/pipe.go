@@ -44,7 +44,7 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeInitiator(stream, peerKey)
+	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("pipe noise: %w", err)
 	}
@@ -108,7 +108,7 @@ func doReceivePipeConn(ctx context.Context, conn *quic.Conn, peerKey []byte) err
 	}
 	defer stream.Close()
 
-	ns, err := chunkHandshakeResponder(stream, peerKey)
+	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {
 		return fmt.Errorf("pipe noise: %w", err)
 	}

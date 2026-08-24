@@ -1,14 +1,24 @@
 package crypto
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"sync"
+	"time"
 
 	"github.com/flynn/noise"
 )
+
+// HandshakeTimeout is the default deadline applied to a Noise_XX handshake when
+// the caller does not supply a context that already carries a deadline.
+// A well-behaved peer completes the three-message exchange in milliseconds; 30 s
+// is deliberately generous to accommodate slow WAN links while still protecting
+// against goroutine leaks caused by silent or malicious peers (#479).
+const HandshakeTimeout = 30 * time.Second
 
 // noiseReadPool pools ciphertext read buffers (max Noise frame = 65535 bytes).
 var noiseReadPool = sync.Pool{
@@ -170,12 +180,18 @@ func newHS(initiator bool, key noise.DHKey) (*noise.HandshakeState, error) {
 // This function is intended for the *control stream only*.
 // Chunk streams must NOT call this; derive per-stream keys with DeriveChunkStreamKey
 // from the control stream's session keys instead.
+//
+// Uses context.Background() with HandshakeTimeout. Prefer HandshakeInitiatorCtx
+// when a parent context or custom deadline is available.
 func HandshakeInitiator(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeInitiatorFull(rw, key)
 	return ns, err
 }
 
 // HandshakeResponder は Noise_XX のレスポンダー側ハンドシェイクを実行する。
+//
+// Uses context.Background() with HandshakeTimeout. Prefer HandshakeResponderCtx
+// when a parent context or custom deadline is available.
 func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
 	ns, _, err := HandshakeResponderFull(rw, key)
 	return ns, err
@@ -184,21 +200,61 @@ func HandshakeResponder(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error)
 // HandshakeInitiatorFull はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
 // 制御ストリームや TOFU 検証が必要な箇所で使用する。
 func HandshakeInitiatorFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
-	hs, err := newHS(true, key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return doXX(rw, hs, true)
+	return HandshakeInitiatorFullCtx(context.Background(), rw, key)
 }
 
 // HandshakeResponderFull はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
 // 制御ストリームや TOFU 検証が必要な箇所で使用する。
 func HandshakeResponderFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
+	return HandshakeResponderFullCtx(context.Background(), rw, key)
+}
+
+// HandshakeInitiatorCtx は context を受け取るイニシエーター側ハンドシェイク。
+// rw が net.Conn を実装する場合、ctx の deadline (なければ HandshakeTimeout) を
+// SetDeadline で適用し、ハンドシェイク完了後にリセットする (#479)。
+func HandshakeInitiatorCtx(ctx context.Context, rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
+	ns, _, err := HandshakeInitiatorFullCtx(ctx, rw, key)
+	return ns, err
+}
+
+// HandshakeResponderCtx は context を受け取るレスポンダー側ハンドシェイク。
+// rw が net.Conn を実装する場合、ctx の deadline (なければ HandshakeTimeout) を
+// SetDeadline で適用し、ハンドシェイク完了後にリセットする (#479)。
+func HandshakeResponderCtx(ctx context.Context, rw io.ReadWriter, key noise.DHKey) (*NoiseStream, error) {
+	ns, _, err := HandshakeResponderFullCtx(ctx, rw, key)
+	return ns, err
+}
+
+// HandshakeInitiatorFullCtx はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
+// context の deadline を net.Conn に伝播させる (#479)。
+func HandshakeInitiatorFullCtx(ctx context.Context, rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
+	hs, err := newHS(true, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return doXX(ctx, rw, hs, true)
+}
+
+// HandshakeResponderFullCtx はハンドシェイクを実行し、暗号ストリームとピアの静的公開鍵を返す。
+// context の deadline を net.Conn に伝播させる (#479)。
+func HandshakeResponderFullCtx(ctx context.Context, rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []byte, error) {
 	hs, err := newHS(false, key)
 	if err != nil {
 		return nil, nil, err
 	}
-	return doXX(rw, hs, false)
+	return doXX(ctx, rw, hs, false)
+}
+
+// applyHandshakeDeadline sets a deadline on conn for the duration of the handshake.
+// If ctx already carries a deadline, that deadline is used; otherwise HandshakeTimeout
+// is applied from now. Returns a cleanup function that clears the deadline.
+func applyHandshakeDeadline(ctx context.Context, conn net.Conn) func() {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(HandshakeTimeout)
+	}
+	_ = conn.SetDeadline(deadline)
+	return func() { _ = conn.SetDeadline(time.Time{}) }
 }
 
 // doXX は Noise_XX の 3 メッセージハンドシェイクを実行し、暗号化ストリームとピアの静的公開鍵を返す。
@@ -212,7 +268,15 @@ func HandshakeResponderFull(rw io.ReadWriter, key noise.DHKey) (*NoiseStream, []
 // CipherState の方向: cs0 = I→R (initiator enc / responder dec)
 //
 //	cs1 = R→I (responder enc / initiator dec)
-func doXX(rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, []byte, error) {
+//
+// #479: ctx の deadline (なければ HandshakeTimeout) を rw が net.Conn の場合に
+// SetDeadline で適用し、ハンドシェイク完了後にクリアする。
+func doXX(ctx context.Context, rw io.ReadWriter, hs *noise.HandshakeState, initiator bool) (*NoiseStream, []byte, error) {
+	// #479: Apply deadline to the underlying connection for the handshake phase only.
+	if conn, ok := rw.(net.Conn); ok {
+		clearDeadline := applyHandshakeDeadline(ctx, conn)
+		defer clearDeadline()
+	}
 	send := func() (*noise.CipherState, *noise.CipherState, error) {
 		msg, cs0, cs1, err := hs.WriteMessage(nil, nil)
 		if err != nil {
