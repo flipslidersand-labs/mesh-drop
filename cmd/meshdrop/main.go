@@ -122,11 +122,15 @@ func cmdConfigPath() *cobra.Command {
 	}
 }
 
+// initSessionFn は transfer.InitSession の差し替え可能なラッパー。
+// テストで失敗シナリオを注入するために使用する。
+var initSessionFn = transfer.InitSession
+
 // initSessionOrWarn は永続 identity と TOFU ストアを初期化する。
 // 失敗した場合は目立つ警告を出し、端末実行時はユーザーに確認を求める。
-// --allow-no-tofu が指定されているか非対話的環境では確認なしで継続する。
+// 非対話的環境（TTY なし）では --allow-no-tofu が明示されない限りエラーを返す。
 func initSessionOrWarn() error {
-	if err := transfer.InitSession(); err == nil {
+	if err := initSessionFn(); err == nil {
 		return nil
 	}
 
@@ -139,9 +143,18 @@ func initSessionOrWarn() error {
 	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════════════╝")
 	fmt.Fprintln(os.Stderr, "")
 
-	// --allow-no-tofu が既に渡されているか非対話的環境では確認なしで継続
-	if allowNoTOFU || !term.IsTerminal(int(os.Stdin.Fd())) {
+	// --allow-no-tofu が明示されている場合のみ継続を許可する。
+	if allowNoTOFU {
 		return nil
+	}
+
+	// 非対話的環境（CI など TTY なし）では --allow-no-tofu なしの継続を拒否する。
+	// 警告が読まれない可能性が高いため、明示的なフラグなしに TOFU なし転送を
+	// 無言実行させないようにする（#476）。
+	if !isTerminal() {
+		fmt.Fprintln(os.Stderr, "Non-interactive environment detected.")
+		fmt.Fprintln(os.Stderr, "To allow TOFU-less transfers in CI/scripts, pass --allow-no-tofu explicitly.")
+		return fmt.Errorf("TOFU initialization failed: use --allow-no-tofu to proceed without peer verification")
 	}
 
 	fmt.Fprint(os.Stderr, "Continue without TOFU verification? [y/N]: ")
@@ -498,7 +511,8 @@ func promptPeerSelection(peers []discovery.Peer) (discovery.Peer, error) {
 }
 
 // isTerminal は標準入力が TTY かどうかを返す。
-func isTerminal() bool {
+// テストで上書きできるよう変数として公開する。
+var isTerminal = func() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
