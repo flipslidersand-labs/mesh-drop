@@ -549,12 +549,26 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	}
 
 	errCh := make(chan error, expectedChunks)
+
+	// #477: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
+	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
+	var closeOnce sync.Once
+	closeConn := func(cerr error) {
+		closeOnce.Do(func() {
+			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
+		})
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < expectedChunks; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- acceptDirChunk(ctx, conn, handles, bar, peerKey, meta.Compressed)
+			aerr := acceptDirChunk(ctx, conn, handles, bar, peerKey, meta.Compressed)
+			if aerr != nil {
+				closeConn(aerr)
+			}
+			errCh <- aerr
 		}()
 	}
 	wg.Wait()
