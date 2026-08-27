@@ -16,10 +16,6 @@ import (
 	"github.com/flipslidersand/mesh-drop/internal/webui"
 )
 
-// uiAuthToken is set from --auth-token flag (or config.yaml).
-// Declared at package level so it is accessible from cmdUI and tests.
-var uiAuthToken string
-
 func cmdUI() *cobra.Command {
 	var port int
 	var noOpen bool
@@ -37,7 +33,7 @@ func cmdUI() *cobra.Command {
 				port = globalCfg.Port
 			}
 			if !cmd.Flags().Changed("auth-token") && globalCfg.AuthToken != "" {
-				uiAuthToken = globalCfg.AuthToken
+				authToken = globalCfg.AuthToken
 			}
 			return nil
 		},
