@@ -1,0 +1,17 @@
+title = "dev-nodee-infrastructure gitleaks config"
+
+[allowlist]
+  description = "False positives and historical findings"
+
+  # Python env-var reads: os.environ.get("KEY") / os.getenv("KEY") are not secrets
+  regexes = [
+    '''os\.environ\.get\(["'][\w_]+["']\)''',
+    '''os\.getenv\(["'][\w_]+["']\)''',
+  ]
+
+  # Historical commit: scripts/minipc-prometheus.yml comment contained API key placeholder.
+  # Key has been replaced in HEAD. Embedding service API key rotation completed (#980).
+  # allowlist entry retained for scanner suppression; commit itself is inert post-rotation.
+  commits = [
+    "17799b832ca99c36c28616922d4dc42844eff6d9",
+  ]
