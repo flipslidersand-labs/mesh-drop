@@ -1,0 +1,79 @@
+name: GPU Runner Selector
+
+# フォールバック順: ai-primary (YUKI) → ai-secondary (DS1) → none
+#
+# L1: YUKI (RTX4070/12GB) — ai-primary
+# L2: DS1  (RTX4060/8GB)  — ai-secondary
+# L3: GPU runner なし → 呼び出し元が ubuntu-latest へフォールバックするか skip
+#
+# gpu-only: true の場合は GPU なし runner へのフォールバックを行わない。
+#
+# fix(#991): repo-level API → org-level API へ変更し org-scoped ARC runner を正しく検出。
+#            --paginate --jq の複数 JSON 出力を jq -s 'add' で単一配列化。
+#            select(.labels[].name) の重複マッチを any(.labels[]; ...) で修正。
+
+on:
+  workflow_call:
+    inputs:
+      gpu-only:
+        description: "true = GPU runner が見つからない場合は runner:none を返す（デフォルト）"
+        type: boolean
+        default: true
+    outputs:
+      runner:
+        description: "選択された runner ラベル。none = GPU runner 不在"
+        value: ${{ jobs.select.outputs.runner }}
+      online-count:
+        description: "利用可能な GPU runner 総数（YUKI+DS1）"
+        value: ${{ jobs.select.outputs.online-count }}
+      tier:
+        description: "選択された tier: primary | secondary | none"
+        value: ${{ jobs.select.outputs.tier }}
+
+jobs:
+  select:
+    name: Select GPU runner (L1→L2→none)
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      online-count: ${{ steps.select.outputs.online-count }}
+      tier: ${{ steps.select.outputs.tier }}
+    steps:
+      - id: select
+        name: Query runner availability
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # fix(#991-1): org-level API を使用して org-scoped ARC runner を正しく検出する。
+          # GITHUB_TOKEN では org runners を読めない場合は空配列にフォールバック。
+          # fix(#991-2): --paginate + jq -s 'add' で複数ページを単一配列に結合する。
+          # fix(#991-3): any(.labels[]; .name == $lbl) でラベル重複マッチによる二重カウントを防ぐ。
+          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          RUNNERS=$(gh api "orgs/${ORG}/actions/runners" --paginate 2>/dev/null \
+            | jq -s 'add // [] | [.[] | select(.status == "online")]' \
+            || echo '[]')
+
+          has_label() {
+            echo "$RUNNERS" | jq --arg lbl "$1" \
+              '[.[] | select(any(.labels[]; .name == $lbl))] | length'
+          }
+
+          PRIMARY=$(has_label "ai-primary")
+          SECONDARY=$(has_label "ai-secondary")
+          TOTAL=$((PRIMARY + SECONDARY))
+
+          echo "online-count=${TOTAL}" >> "$GITHUB_OUTPUT"
+
+          if [ "${PRIMARY:-0}" -gt 0 ]; then
+            echo "runner=ai-primary" >> "$GITHUB_OUTPUT"
+            echo "tier=primary" >> "$GITHUB_OUTPUT"
+            echo "✅ L1: YUKI (ai-primary) online — 選択"
+          elif [ "${SECONDARY:-0}" -gt 0 ]; then
+            echo "runner=ai-secondary" >> "$GITHUB_OUTPUT"
+            echo "tier=secondary" >> "$GITHUB_OUTPUT"
+            echo "⚠️ L2: YUKI offline → DS1 (ai-secondary) にフォールバック"
+          else
+            echo "runner=none" >> "$GITHUB_OUTPUT"
+            echo "tier=none" >> "$GITHUB_OUTPUT"
+            echo "❌ GPU runner (YUKI/DS1) 両方 offline"
+          fi

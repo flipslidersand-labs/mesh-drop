@@ -1,0 +1,51 @@
+name: Runner Health Check
+
+# fix(#991): repo-level API → org-level API へ変更し org-scoped ARC runner を正しく検出。
+#            --paginate + jq -s 'add' で単一配列化。
+#            any(.labels[]; ...) でラベル重複マッチによる二重カウントを防ぐ。
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+        description: "チェックする runner ラベル"
+        required: true
+        type: string
+    outputs:
+      available:
+        description: "指定ラベルの runner が 1 台以上 online か"
+        value: ${{ jobs.check.outputs.available }}
+      online-count:
+        description: "online runner 台数"
+        value: ${{ jobs.check.outputs.online-count }}
+
+jobs:
+  check:
+    name: Check runner availability (${{ inputs.runner-label }})
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+      online-count: ${{ steps.check.outputs.online-count }}
+    steps:
+      - id: check
+        name: Query runner status via GH API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # fix(#991-1): org-level API を使用して org-scoped ARC runner を正しく検出する。
+          # GITHUB_TOKEN では org runners を読めない場合は空配列にフォールバック。
+          # fix(#991-2): --paginate + jq -s 'add' で複数ページを単一配列に結合する。
+          # fix(#991-3): any(.labels[]; .name == $label) でラベル重複マッチを防ぐ。
+          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          RUNNERS=$(gh api "orgs/${ORG}/actions/runners" --paginate 2>/dev/null \
+            | jq -s 'add // [] | [.[] | select(.status == "online")]' \
+            || echo '[]')
+
+          ONLINE=$(echo "$RUNNERS" | jq --arg label "${{ inputs.runner-label }}" \
+            '[.[] | select(any(.labels[]; .name == $label))] | length')
+
+          echo "online-count=${ONLINE}" >> "$GITHUB_OUTPUT"
+          echo "available=$([ "${ONLINE:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          echo "Runner label: ${{ inputs.runner-label }}"
+          echo "Online count: ${ONLINE}"

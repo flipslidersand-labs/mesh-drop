@@ -1,0 +1,98 @@
+name: WoL YUKI Wakeup
+
+# fix(#991): WSL2 runner 状態確認を repo-level API → org-level API へ変更。
+#            --paginate + jq -s 'add' で単一配列化。
+#            any(.labels[]; ...) でラベル重複マッチを防ぐ。
+
+on:
+  workflow_call:
+    outputs:
+      yuki-ready:
+        description: "YUKI is online and reachable"
+        value: ${{ jobs.wakeup.outputs.ready }}
+      wsl2-status:
+        description: "WSL2 runner status after wakeup: running | stopped | unknown"
+        value: ${{ jobs.wakeup.outputs.wsl2-status }}
+
+jobs:
+  wakeup:
+    name: Wake YUKI (192.168.68.56)
+    # WoL orchestrator は常時稼働の MiniPC 上で走らせる。
+    # 旧 arc-dev-nodee ラベルは現 live runner (arc-minipc) に不一致のため ci-pool に修正 (#857)。
+    runs-on: linux-general  # #870: ci-pool → linux-general pool 切替
+    outputs:
+      ready: ${{ steps.wait.outputs.ready }}
+      wsl2-status: ${{ steps.wsl2.outputs.status }}
+    steps:
+      - name: Check if YUKI is already online
+        id: check
+        run: |
+          if nc -zw5 192.168.68.56 22 2>/dev/null; then
+            echo "YUKI is already online"
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "YUKI is offline — sending WoL"
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send WoL magic packet
+        if: steps.check.outputs.already == 'false'
+        run: |
+          python3 - <<'EOF'
+          import socket
+          mac = "bc:fc:e7:87:78:cb"
+          mac_bytes = bytes.fromhex(mac.replace(":", ""))
+          packet = b"\xff" * 6 + mac_bytes * 16
+          with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+              s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+              s.sendto(packet, ("192.168.68.255", 9))
+          print(f"WoL packet sent to {mac} (YUKI 192.168.68.56)")
+          EOF
+
+      - name: Wait for YUKI to boot
+        id: wait
+        run: |
+          if [ "${{ steps.check.outputs.already }}" = "true" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Waiting for YUKI to come online (max 120s)..."
+          for i in $(seq 1 24); do
+            sleep 5
+            if nc -zw5 192.168.68.56 22 2>/dev/null; then
+              echo "YUKI is online after $((i * 5))s"
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "  attempt $i/24..."
+          done
+          # 非致命: YUKI が起きなくても job は成功させ ready=false を出力する。
+          # select-runner が GitHub API で online 状態を確認し L2(DS1)→none へ
+          # フォールバックするため、ここで exit 1 すると needs ゲートで select-runner が
+          # skip され、DS1 が起動していても smoke test 全体が失敗する (#857 の根本原因)。
+          echo "⚠️ YUKI did not come online within 120s — select-runner will decide"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+      - name: Check WSL2 runner status
+        id: wsl2
+        if: steps.wait.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # fix(#991-1): org-level API を使用して org-scoped ARC runner を正しく検出する。
+          # GITHUB_TOKEN では org runners を読めない場合は空配列にフォールバック。
+          # fix(#991-2): --paginate + jq -s 'add' で複数ページを単一配列に結合する。
+          # fix(#991-3): any(.labels[]; .name == "ai-primary") で重複マッチを防ぐ。
+          sleep 10  # runner 登録完了まで待機
+          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          ONLINE=$(gh api "orgs/${ORG}/actions/runners" --paginate 2>/dev/null \
+            | jq -s 'add // [] | [.[] | select(.status == "online") | select(any(.labels[]; .name == "ai-primary"))] | length' \
+            || echo 0)
+
+          if [ "${ONLINE:-0}" -gt 0 ]; then
+            echo "status=running" >> "$GITHUB_OUTPUT"
+            echo "✅ YUKI ARC runner (ai-primary) online — WSL2 正常起動"
+          else
+            echo "status=stopped" >> "$GITHUB_OUTPUT"
+            echo "⚠️ YUKI SSH は応答するが ARC runner が未登録 — WSL2 未起動の可能性"
+          fi
