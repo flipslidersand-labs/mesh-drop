@@ -13,7 +13,7 @@ jobs:
     with:
       go-version: "1.25"
       runner: ubuntu-latest
-      coverage-threshold: 51   # 実測 50.8%（#281/#461）。段階的に引き上げる（目標 80%）
+      coverage-threshold: 60   # #515: 51→60%（qa-workflows デフォルト値）。次: 70%→80% を段階的に引き上げ予定
 
   windows-ci:
     name: Windows build & test
