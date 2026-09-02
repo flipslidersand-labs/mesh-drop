@@ -593,11 +593,15 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 	errCh := make(chan error, remaining)
 
-	// #153: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
+	// #153/#513: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
 	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
+	// #513: ctx をキャンセルして AcceptStream が即座にキャンセルエラーで返るようにする。
+	innerCtx, cancelInner := context.WithCancel(ctx)
+	defer cancelInner()
 	var closeOnce sync.Once
 	closeConn := func(cerr error) {
 		closeOnce.Do(func() {
+			cancelInner()
 			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
 		})
 	}
@@ -607,7 +611,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cm, aerr := acceptChunkWithMeta(ctx, conn, f, bar, peerKey, meta.Compressed)
+			cm, aerr := acceptChunkWithMeta(innerCtx, conn, f, bar, peerKey, meta.Compressed)
 			if aerr != nil {
 				closeConn(aerr)
 				errCh <- aerr
