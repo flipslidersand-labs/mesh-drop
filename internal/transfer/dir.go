@@ -639,7 +639,9 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	}
 
 	// ハッシュ検証（完了済みファイルは acceptMetaDispatch で検証済みなのでスキップ）
-	// #359: 検証成功後に一時ファイルをアトミックリネームして最終パスへ移動する。
+	// #509: 検証とリネームを2パスに分離して「全成功または全ロールバック」を保証する。
+	// 第1パスで全ファイルのハッシュを検証し、全成功の場合のみ第2パスでリネームする。
+	// これにより検証失敗時に一部ファイルだけが最終パスに移動するのを防ぐ。
 	for i, fm := range meta.Files {
 		if _, done := doneSet[fm.Path]; done {
 			continue
@@ -656,6 +658,13 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if fm.Hash != "" && got != fm.Hash {
 			return fmt.Errorf("%w: %s (want %s, got %s)",
 				ErrHashMismatch, fm.Path, hashPreview(fm.Hash, 16), hashPreview(got, 16))
+		}
+	}
+	// 第2パス: 全ハッシュ検証成功後に一時ファイルをアトミックリネームして最終パスへ移動する。
+	// #359 のアトミック性は維持される。
+	for i, fm := range meta.Files {
+		if _, done := doneSet[fm.Path]; done {
+			continue
 		}
 		if err := os.Rename(handles[i].tmpPath, handles[i].path); err != nil {
 			return err
