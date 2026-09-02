@@ -12,112 +12,105 @@ import (
 	"github.com/flynn/noise"
 )
 
-// resetSessionState resets the package-level session globals to a clean state.
-// This must be called at the start of each test that touches InitSession or the
-// session identity/peer variables, to prevent test cross-contamination.
-func resetSessionState() {
-	initMu.Lock()
-	defer initMu.Unlock()
-	sessionIdentity = noise.DHKey{}
-	sessionPeers = nil
-	sessionInited = false
+// newTestSession returns a zero-value *Session with no identity and no TOFU store.
+// Each test that exercises session state should call this to get an isolated instance,
+// making t.Parallel() safe — no shared global is touched.
+func newTestSession() *Session {
+	return &Session{}
 }
 
-// TestSessionGlobalState_Isolation verifies that resetSessionState fully
-// resets the package globals so that a subsequent test starts clean.
+// newTestSessionWithKey returns a *Session pre-loaded with a freshly generated identity.
+func newTestSessionWithKey(t *testing.T) (*Session, noise.DHKey) {
+	t.Helper()
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	s := &Session{}
+	s.identity = key
+	return s, key
+}
+
+// TestSessionGlobalState_Isolation verifies that a newly created Session has zeroed state.
 func TestSessionGlobalState_Isolation(t *testing.T) {
-	resetSessionState()
+	t.Parallel()
+	s := newTestSession()
 
-	if len(sessionIdentity.Private) != 0 {
-		t.Error("sessionIdentity.Private should be empty after reset")
+	if len(s.identity.Private) != 0 {
+		t.Error("identity.Private should be empty in a new Session")
 	}
-	if len(sessionIdentity.Public) != 0 {
-		t.Error("sessionIdentity.Public should be empty after reset")
+	if len(s.identity.Public) != 0 {
+		t.Error("identity.Public should be empty in a new Session")
 	}
-	if sessionPeers != nil {
-		t.Error("sessionPeers should be nil after reset")
+	if s.peers != nil {
+		t.Error("peers should be nil in a new Session")
 	}
-	if sessionInited {
-		t.Error("sessionInited should be false after reset")
+	if s.inited {
+		t.Error("inited should be false in a new Session")
 	}
 }
 
-// TestInitSession_Idempotent verifies that calling InitSession multiple times
-// from concurrent goroutines only initializes the session once and does not
-// race on the shared state.
+// TestInitSession_Idempotent verifies that calling init() multiple times
+// from concurrent goroutines only initializes the Session once.
 func TestInitSession_Idempotent(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
 
 	dir := t.TempDir()
-	// Override the identity directory by pre-loading a key.
 	key, err := crypto.LoadOrCreateIdentity(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Manually set state as if InitSession already ran with this key.
-	initMu.Lock()
-	sessionIdentity = key
-	sessionPeers = crypto.NewKnownPeers(dir)
-	sessionInited = true
-	initMu.Unlock()
+	s := &Session{
+		identity: key,
+		peers:    crypto.NewKnownPeers(dir),
+		inited:   true,
+	}
 
-	// Now call InitSession concurrently — it should be a no-op.
+	// Calling init concurrently on an already-inited Session should be a no-op.
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// InitSession should return immediately since sessionInited==true.
-			if err := InitSession(); err != nil {
-				t.Errorf("InitSession returned error on re-entry: %v", err)
+			// init() on an already-inited session returns nil immediately.
+			if err := s.init(); err != nil {
+				t.Errorf("init returned error on re-entry: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	// The identity must still match what we set.
-	if !bytes.Equal(sessionIdentity.Public, key.Public) {
-		t.Error("sessionIdentity changed after concurrent InitSession calls")
+	if !bytes.Equal(s.identity.Public, key.Public) {
+		t.Error("identity changed after concurrent init() calls")
 	}
 }
 
 // TestLocalKey_FallsBackToEphemeral verifies that localKey generates a fresh
-// ephemeral key when sessionIdentity has no private key set.
+// ephemeral key when no persistent identity is set.
 func TestLocalKey_FallsBackToEphemeral(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
+	s := newTestSession()
 
-	k1, err := localKey()
+	k1, err := s.localKey()
 	if err != nil {
 		t.Fatalf("localKey error: %v", err)
 	}
-	k2, err := localKey()
+	k2, err := s.localKey()
 	if err != nil {
 		t.Fatalf("second localKey error: %v", err)
 	}
-	// Without a persistent identity, two calls should produce different keys.
 	if bytes.Equal(k1.Public, k2.Public) {
 		t.Error("ephemeral keys from two localKey() calls should differ")
 	}
 }
 
 // TestLocalKey_UsesPersistentIdentity verifies that localKey returns the
-// persistent session identity when one has been set.
+// persistent identity when one has been set.
 func TestLocalKey_UsesPersistentIdentity(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
+	s, key := newTestSessionWithKey(t)
 
-	dir := t.TempDir()
-	key, err := crypto.LoadOrCreateIdentity(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initMu.Lock()
-	sessionIdentity = key
-	initMu.Unlock()
-
-	got, err := localKey()
+	got, err := s.localKey()
 	if err != nil {
 		t.Fatalf("localKey: %v", err)
 	}
@@ -149,13 +142,12 @@ func pipeRWPairTransfer() (rwPairTransfer, rwPairTransfer, func()) {
 // chunkHandshakeInitiator returns an error when the peer's actual public key
 // does not match the expected key supplied by the caller.
 func TestChunkHandshake_PeerKeyMismatch_Initiator(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
+	s := newTestSession()
 
 	a, b, cleanup := pipeRWPairTransfer()
 	defer cleanup()
 
-	// Two distinct keypairs: one the responder actually uses, one we claim is expected.
 	actualResponderKey, err := crypto.GenerateKeypair()
 	if err != nil {
 		t.Fatal(err)
@@ -167,18 +159,12 @@ func TestChunkHandshake_PeerKeyMismatch_Initiator(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		// Responder side — uses actualResponderKey.
-		ns, _, respErr := crypto.HandshakeResponderFull(b, actualResponderKey)
-		if respErr == nil && ns != nil {
-			// Drain any data the initiator might write before it errors.
-			_ = ns
-		}
+		_, _, respErr := crypto.HandshakeResponderFull(b, actualResponderKey)
 		errCh <- respErr
 	}()
 
-	// Initiator expects wrongExpectedKey but the responder uses actualResponderKey.
-	_, initErr := chunkHandshakeInitiator(context.Background(), a, wrongExpectedKey.Public)
-	<-errCh // wait for responder goroutine to finish
+	_, initErr := s.chunkHandshakeInitiator(context.Background(), a, wrongExpectedKey.Public)
+	<-errCh
 
 	if initErr == nil {
 		t.Error("chunkHandshakeInitiator should return error when peer key mismatches expectedPeer")
@@ -189,8 +175,8 @@ func TestChunkHandshake_PeerKeyMismatch_Initiator(t *testing.T) {
 // chunkHandshakeResponder returns an error when the peer's actual public key
 // does not match the expected key supplied by the caller.
 func TestChunkHandshake_PeerKeyMismatch_Responder(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
+	s := newTestSession()
 
 	a, b, cleanup := pipeRWPairTransfer()
 	defer cleanup()
@@ -206,16 +192,11 @@ func TestChunkHandshake_PeerKeyMismatch_Responder(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		// Initiator side — uses actualInitiatorKey.
-		ns, _, initErr := crypto.HandshakeInitiatorFull(a, actualInitiatorKey)
-		if initErr == nil && ns != nil {
-			_ = ns
-		}
+		_, _, initErr := crypto.HandshakeInitiatorFull(a, actualInitiatorKey)
 		errCh <- initErr
 	}()
 
-	// Responder expects wrongExpectedKey but initiator uses actualInitiatorKey.
-	_, respErr := chunkHandshakeResponder(context.Background(), b, wrongExpectedKey.Public)
+	_, respErr := s.chunkHandshakeResponder(context.Background(), b, wrongExpectedKey.Public)
 	<-errCh
 
 	if respErr == nil {
@@ -223,18 +204,9 @@ func TestChunkHandshake_PeerKeyMismatch_Responder(t *testing.T) {
 	}
 }
 
-// TestChunkHandshake_CorrectKey_Succeeds verifies the happy path: when the
-// expectedPeer key matches the actual peer's public key, the handshake succeeds.
-// #193: global state reset via t.Cleanup to prevent cross-test contamination.
-//
-// Note: because sessionIdentity is a package-level global read by localKey()
-// without holding initMu, both sides of a pipe-based handshake test must use
-// the same sessionIdentity value. We use crypto.HandshakeInitiatorFull /
-// HandshakeResponderFull directly so each side can supply its own key without
-// mutating the shared global concurrently.
+// TestChunkHandshake_CorrectKey_Succeeds verifies the happy path.
 func TestChunkHandshake_CorrectKey_Succeeds(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
 
 	a, b, cleanup := pipeRWPairTransfer()
 	defer cleanup()
@@ -248,8 +220,6 @@ func TestChunkHandshake_CorrectKey_Succeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run initiator and responder using the full handshake helpers directly so
-	// each side uses its own key without racing on the shared sessionIdentity.
 	respErrCh := make(chan error, 1)
 	go func() {
 		_, peerKey, err := crypto.HandshakeResponderFull(b, responderKey)
@@ -274,12 +244,9 @@ func TestChunkHandshake_CorrectKey_Succeeds(t *testing.T) {
 }
 
 // TestChunkHandshake_EmptyExpectedPeer_SkipsVerification verifies that when
-// expectedPeer is nil/empty, no key verification is performed and the handshake
-// completes successfully regardless of the peer's actual key.
-// #193: global state reset via t.Cleanup to prevent cross-test contamination.
+// expectedPeer is nil/empty, no key verification is performed.
 func TestChunkHandshake_EmptyExpectedPeer_SkipsVerification(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
 
 	a, b, cleanup := pipeRWPairTransfer()
 	defer cleanup()
@@ -287,7 +254,6 @@ func TestChunkHandshake_EmptyExpectedPeer_SkipsVerification(t *testing.T) {
 	initiatorKey, _ := crypto.GenerateKeypair()
 	responderKey, _ := crypto.GenerateKeypair()
 
-	// Use direct handshake helpers to avoid concurrent writes to sessionIdentity.
 	respErrCh := make(chan error, 1)
 	go func() {
 		_, _, err := crypto.HandshakeResponderFull(b, responderKey)
@@ -305,23 +271,17 @@ func TestChunkHandshake_EmptyExpectedPeer_SkipsVerification(t *testing.T) {
 	}
 }
 
-// TestSessionInited_GuardsPeers verifies that when sessionPeers is nil (TOFU
-// disabled), the control handshake does not attempt peer verification and
-// completes without error.
-// #193: global state reset via t.Cleanup to prevent cross-test contamination.
+// TestSessionInited_NoPeers_SkipsTOFU verifies that when peers is nil (TOFU
+// disabled), the control handshake does not attempt peer verification.
 func TestSessionInited_NoPeers_SkipsTOFU(t *testing.T) {
-	resetSessionState()
-	t.Cleanup(resetSessionState)
+	t.Parallel()
 
-	// sessionPeers == nil means no TOFU verification.
 	a, b, cleanup := pipeRWPairTransfer()
 	defer cleanup()
 
 	initiatorKey, _ := crypto.GenerateKeypair()
 	responderKey, _ := crypto.GenerateKeypair()
 
-	// Use direct handshake helpers to avoid concurrent writes to sessionIdentity.
-	// sessionPeers == nil is enforced by resetSessionState at the top.
 	respErrCh := make(chan error, 1)
 	go func() {
 		_, _, err := crypto.HandshakeResponderFull(b, responderKey)
@@ -332,9 +292,9 @@ func TestSessionInited_NoPeers_SkipsTOFU(t *testing.T) {
 	respErr := <-respErrCh
 
 	if initErr != nil {
-		t.Errorf("controlHandshakeInitiator with nil sessionPeers: %v", initErr)
+		t.Errorf("controlHandshakeInitiator with nil peers: %v", initErr)
 	}
 	if respErr != nil {
-		t.Errorf("controlHandshakeResponder with nil sessionPeers: %v", respErr)
+		t.Errorf("controlHandshakeResponder with nil peers: %v", respErr)
 	}
 }

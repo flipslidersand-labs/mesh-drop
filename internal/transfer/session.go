@@ -16,25 +16,33 @@ import (
 // dispatchConn はこのエラーを検出して専用の QUIC エラーコードで接続を閉じる。
 var errTOFURejected = errors.New("peer rejected by TOFU store")
 
-// sessionIdentity は起動時に LoadOrCreateIdentity でロードされる永続 keypair。
-// ゼロ値の場合、制御ストリームは毎回 ephemeral 鍵を使う（TOFU なし）。
-var sessionIdentity noise.DHKey
+// Session holds a Noise identity and optional TOFU peer store.
+// The zero value is valid: no persistent identity (ephemeral keys per handshake)
+// and no TOFU verification.
+// All methods are safe for concurrent use.
+type Session struct {
+	mu       sync.RWMutex
+	identity noise.DHKey
+	peers    *crypto.KnownPeers
+	inited   bool
+}
 
-// sessionPeers は TOFU 検証ストア。nil の場合は TOFU を行わない。
-var sessionPeers *crypto.KnownPeers
-
-var (
-	initMu        sync.RWMutex // #218: localKey の並列読み取りを許容するため RWMutex に変更
-	sessionInited bool
-)
+// defaultSession is the package-level Session used by all production code paths.
+// Tests that need isolation should create their own *Session rather than
+// touching this variable directly.
+var defaultSession Session
 
 // InitSession loads (or creates) the persistent identity and TOFU store from the
 // default config directory. Safe to call from multiple goroutines.
 // Retries on failure — a temporary error does not permanently disable TOFU.
-func InitSession() error {
-	initMu.Lock()
-	defer initMu.Unlock()
-	if sessionInited {
+func InitSession() error { return defaultSession.init() }
+
+// init loads the persistent identity and TOFU store for this Session.
+// Idempotent and safe for concurrent use.
+func (s *Session) init() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inited {
 		return nil
 	}
 	dir := crypto.IdentityDir()
@@ -42,17 +50,18 @@ func InitSession() error {
 	if err != nil {
 		return err
 	}
-	sessionIdentity = key
-	sessionPeers = crypto.NewKnownPeers(dir)
-	sessionInited = true
+	s.identity = key
+	s.peers = crypto.NewKnownPeers(dir)
+	s.inited = true
 	return nil
 }
 
-// localKey は sessionIdentity が設定されていればそれを、なければ ephemeral 鍵を返す。
-func localKey() (noise.DHKey, error) {
-	initMu.RLock()
-	key := sessionIdentity
-	initMu.RUnlock()
+// localKey returns the Session's persistent identity, or a fresh ephemeral key
+// when no identity has been set (init was not called or failed).
+func (s *Session) localKey() (noise.DHKey, error) {
+	s.mu.RLock()
+	key := s.identity
+	s.mu.RUnlock()
 	if len(key.Private) > 0 {
 		return key, nil
 	}
@@ -63,8 +72,8 @@ func localKey() (noise.DHKey, error) {
 // 永続 identity を使い、TOFU 検証を行う。
 // 返す []byte はピアの静的公開鍵（チャンクストリームの検証に使う）。
 // ctx はハンドシェイクのタイムアウト制御に使う (#479)。
-func controlHandshakeInitiator(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
-	key, err := localKey()
+func (s *Session) controlHandshakeInitiator(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	key, err := s.localKey()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -72,8 +81,11 @@ func controlHandshakeInitiator(ctx context.Context, stream io.ReadWriter) (*cryp
 	if err != nil {
 		return nil, nil, err
 	}
-	if sessionPeers != nil && len(peerStatic) > 0 {
-		if err := sessionPeers.Verify(peerStatic); err != nil {
+	s.mu.RLock()
+	peers := s.peers
+	s.mu.RUnlock()
+	if peers != nil && len(peerStatic) > 0 {
+		if err := peers.Verify(peerStatic); err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}
@@ -84,8 +96,8 @@ func controlHandshakeInitiator(ctx context.Context, stream io.ReadWriter) (*cryp
 // 永続 identity を使い、TOFU 検証を行う。
 // 返す []byte はピアの静的公開鍵（チャンクストリームの検証に使う）。
 // ctx はハンドシェイクのタイムアウト制御に使う (#479)。
-func controlHandshakeResponder(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
-	key, err := localKey()
+func (s *Session) controlHandshakeResponder(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	key, err := s.localKey()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,8 +105,11 @@ func controlHandshakeResponder(ctx context.Context, stream io.ReadWriter) (*cryp
 	if err != nil {
 		return nil, nil, err
 	}
-	if sessionPeers != nil && len(peerStatic) > 0 {
-		if err := sessionPeers.Verify(peerStatic); err != nil {
+	s.mu.RLock()
+	peers := s.peers
+	s.mu.RUnlock()
+	if peers != nil && len(peerStatic) > 0 {
+		if err := peers.Verify(peerStatic); err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errTOFURejected, err)
 		}
 	}
@@ -102,11 +117,11 @@ func controlHandshakeResponder(ctx context.Context, stream io.ReadWriter) (*cryp
 }
 
 // chunkHandshakeInitiator はデータチャンクストリーム用ハンドシェイクを実行する。
-// sessionIdentity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
-// expectedPeer が空のとき（InitSession 失敗など）は検証をスキップする。
+// Session の identity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
+// expectedPeer が空のとき（init 失敗など）は検証をスキップする。
 // ctx はハンドシェイクのタイムアウト制御に使う (#479)。
-func chunkHandshakeInitiator(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
-	key, err := localKey()
+func (s *Session) chunkHandshakeInitiator(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	key, err := s.localKey()
 	if err != nil {
 		return nil, err
 	}
@@ -121,11 +136,11 @@ func chunkHandshakeInitiator(ctx context.Context, stream io.ReadWriter, expected
 }
 
 // chunkHandshakeResponder はデータチャンクストリーム用ハンドシェイクを実行する。
-// sessionIdentity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
-// expectedPeer が空のとき（InitSession 失敗など）は検証をスキップする。
+// Session の identity を使い、ピア静的鍵が expectedPeer と一致するか検証する。
+// expectedPeer が空のとき（init 失敗など）は検証をスキップする。
 // ctx はハンドシェイクのタイムアウト制御に使う (#479)。
-func chunkHandshakeResponder(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
-	key, err := localKey()
+func (s *Session) chunkHandshakeResponder(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	key, err := s.localKey()
 	if err != nil {
 		return nil, err
 	}
@@ -137,4 +152,25 @@ func chunkHandshakeResponder(ctx context.Context, stream io.ReadWriter, expected
 		return nil, fmt.Errorf("chunk stream: peer key mismatch")
 	}
 	return ns, nil
+}
+
+// --- package-level wrappers delegating to defaultSession ---
+// Callers in dir.go / pipe.go / quic.go are unchanged.
+
+func localKey() (noise.DHKey, error) { return defaultSession.localKey() }
+
+func controlHandshakeInitiator(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	return defaultSession.controlHandshakeInitiator(ctx, stream)
+}
+
+func controlHandshakeResponder(ctx context.Context, stream io.ReadWriter) (*crypto.NoiseStream, []byte, error) {
+	return defaultSession.controlHandshakeResponder(ctx, stream)
+}
+
+func chunkHandshakeInitiator(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	return defaultSession.chunkHandshakeInitiator(ctx, stream, expectedPeer)
+}
+
+func chunkHandshakeResponder(ctx context.Context, stream io.ReadWriter, expectedPeer []byte) (*crypto.NoiseStream, error) {
+	return defaultSession.chunkHandshakeResponder(ctx, stream, expectedPeer)
 }
