@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -687,16 +688,20 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 // authMiddleware enforces optional Bearer-token authentication.
 // When token is empty the middleware is a no-op (backward-compatible).
-// Clients may supply the token via the Authorization header ("Bearer <token>")
-// or via the "token" query parameter.
+// Clients must supply the token via the Authorization header ("Bearer <token>").
+// Query-parameter authentication is intentionally omitted: passing tokens in
+// URLs exposes them in HTTP access logs, browser history, and Referer headers
+// (RFC 6750 Section 2.3 deprecates this practice).
+// Comparison uses crypto/subtle.ConstantTimeCompare to prevent timing
+// side-channel attacks that could allow token enumeration character-by-character.
 func authMiddleware(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next // no auth configured — pass through
 	}
+	tokenBytes := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		query := r.URL.Query().Get("token")
-		if bearer != token && query != token {
+		if subtle.ConstantTimeCompare([]byte(bearer), tokenBytes) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="meshdrop"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
