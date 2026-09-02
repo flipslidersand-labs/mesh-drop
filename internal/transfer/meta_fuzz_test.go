@@ -30,7 +30,7 @@ func FuzzSanitizeName(f *testing.F) {
 	f.Add(strings.Repeat("a", 4096)) // long name
 
 	f.Fuzz(func(t *testing.T, name string) {
-		err := sanitizeName(name)
+		err := SanitizeName(name)
 		if err != nil {
 			// Rejected names are always fine — sanitizeName did its job.
 			return

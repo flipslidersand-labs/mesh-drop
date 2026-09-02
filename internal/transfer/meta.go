@@ -131,7 +131,7 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 // sanitizeName は名前文字列に制御文字・null バイト・不正 UTF-8・絶対パス・
 // パストラバーサル（..）が含まれないかを検証する。
 // ログ汚染やファイルシステムの予期しない挙動を防ぐ (#325, #348)。
-func sanitizeName(s string) error {
+func SanitizeName(s string) error {
 	if !utf8.ValidString(s) {
 		return fmt.Errorf("name contains invalid UTF-8: %q", s)
 	}
@@ -171,7 +171,7 @@ func readMeta(r io.Reader) (Meta, error) {
 		return Meta{}, err
 	}
 	// #325: 制御文字・null バイト・不正 UTF-8 を拒否する
-	if err := sanitizeName(m.Name); err != nil {
+	if err := SanitizeName(m.Name); err != nil {
 		return Meta{}, fmt.Errorf("meta.Name: %w", err)
 	}
 	if !m.IsPipe {
@@ -194,7 +194,7 @@ func readMeta(r io.Reader) (Meta, error) {
 			return Meta{}, fmt.Errorf("files[%d].Size out of range: %d", i, f.Size)
 		}
 		// #325: FileMeta.Path も同様に制御文字を拒否する
-		if err := sanitizeName(f.Path); err != nil {
+		if err := SanitizeName(f.Path); err != nil {
 			return Meta{}, fmt.Errorf("files[%d].Path: %w", i, err)
 		}
 	}

@@ -352,7 +352,19 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	tmp, err := os.CreateTemp("", "meshdrop-ui-*-"+filepath.Base(header.Filename))
+	// #510: sanitize the browser-supplied filename before using it in logs/SSE.
+	// filepath.Base strips path separators; transfer.SanitizeName rejects control
+	// characters, null bytes, invalid UTF-8, and Windows reserved device names.
+	safeFilename := filepath.Base(header.Filename)
+	if err := transfer.SanitizeName(safeFilename); err != nil {
+		http.Error(w, "invalid filename: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Do NOT embed user-supplied input in the temp file name pattern — use a
+	// random suffix only so that reserved device names (CON, NUL, …) cannot
+	// appear in the OS temp path.
+	tmp, err := os.CreateTemp("", "meshdrop-ui-*")
 	if err != nil {
 		http.Error(w, "temp file: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -413,7 +425,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 					}
 					s.hub.publish(ProgressEvent{
 						ID: id, Direction: "send",
-						File: header.Filename, Peer: peerAddr,
+						File: safeFilename, Peer: peerAddr,
 						Sent: pct, Total: total,
 						ElapsedMs: elapsedMs, SpeedBps: speedBps, EtaMs: etaMs,
 					})
@@ -433,7 +445,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		ev := ProgressEvent{
 			ID: id, Direction: "send",
-			File: header.Filename, Peer: peerAddr,
+			File: safeFilename, Peer: peerAddr,
 			Sent: total, Total: total, Done: true,
 			ElapsedMs: elapsedMs, SpeedBps: finalSpeedBps,
 		}
@@ -445,7 +457,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		entry := HistoryEntry{
 			ID: id, Direction: "send",
-			File: header.Filename, Peer: peerAddr,
+			File: safeFilename, Peer: peerAddr,
 			Size: total, At: time.Now(),
 		}
 		if sendErr != nil {
