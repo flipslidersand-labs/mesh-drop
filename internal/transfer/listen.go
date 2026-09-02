@@ -6,9 +6,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/quic-go/quic-go"
 )
+
+// maxConcurrentConns is the maximum number of connections handled simultaneously
+// by ListenContinuous. Connections beyond this limit are accepted but queued
+// inside the semaphore; the goroutine blocks until a slot is free, bounding
+// the number of live goroutines and open file descriptors.
+const maxConcurrentConns = 32
+
+// connTimeout is the per-connection deadline. A connection that has not
+// completed transfer within this window is forcibly cancelled.
+const connTimeout = 5 * time.Minute
 
 // RecvCallback is called after each file is received successfully.
 // name is the original filename, path is the absolute on-disk location,
@@ -19,6 +30,9 @@ type RecvCallback func(name, path string, size int64, peerAddr string)
 // For each connection it dispatches the normal receive pipeline, writing files to outDir.
 // On successful single-file receive, cb is called.
 // Blocks until ctx is cancelled.
+//
+// At most maxConcurrentConns connections are processed concurrently; additional
+// accepted connections wait for a slot. Each connection is subject to connTimeout.
 func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDir string, cb RecvCallback) error {
 	ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 	if err != nil {
@@ -26,14 +40,28 @@ func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDi
 	}
 	defer ln.Close()
 
+	sem := make(chan struct{}, maxConcurrentConns)
+
 	for {
 		conn, err := ln.Accept(ctx)
 		if err != nil {
 			return err
 		}
 		go func() {
+			// Acquire a concurrency slot before doing any work.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				conn.CloseWithError(1, "server shutting down") //nolint:errcheck
+				return
+			}
+			defer func() { <-sem }()
+
+			connCtx, cancel := context.WithTimeout(ctx, connTimeout)
+			defer cancel()
+
 			peerAddr := conn.RemoteAddr().String()
-			if err := dispatchConnToDir(ctx, conn, outDir, peerAddr, cb); err != nil {
+			if err := dispatchConnToDir(connCtx, conn, outDir, peerAddr, cb); err != nil {
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 					fmt.Fprintf(os.Stderr, "receive from %s: %v\n", peerAddr, err)
 				}
