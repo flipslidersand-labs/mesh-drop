@@ -215,7 +215,9 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 			dirDone = checkDirDone(outDir, meta.Files)
 		}
 		rs := ResumeState{DirDone: dirDone}
-		_ = writeResumeState(ns, rs)
+		if err := writeResumeState(ns, rs); err != nil {
+			slog.Warn("writeResumeState failed (batch)", "err", err)
+		}
 		return meta, nil, peerKey, dirDone, nil
 	}
 
@@ -229,7 +231,9 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	}
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
-	_ = writeResumeState(ns, rs) // 旧クライアントへの graceful degradation
+	if err := writeResumeState(ns, rs); err != nil { // 旧クライアントは無視してよいが記録する
+		slog.Warn("writeResumeState failed (single file)", "err", err)
+	}
 
 	return meta, cp, peerKey, nil, nil
 }
@@ -620,10 +624,14 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	close(errCh)
 	fmt.Println()
 
+	var errs []error
 	for e := range errCh {
 		if e != nil {
-			return e
+			errs = append(errs, e)
 		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
 	}
 
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
