@@ -12,8 +12,9 @@ import (
 
 // SendPipe は os.Stdin を QUIC ストリームで送信する。
 // サイズ不明のためチャンク数は1固定。
-func SendPipe(ctx context.Context, addr string) error {
-	conn, err := quic.DialAddr(ctx, addr, clientTLS(), quicConfig())
+// fingerprint が非 nil の場合は TLS ピンニングを行い、nil の場合は自己署名チェックのみ行う。
+func SendPipe(ctx context.Context, addr string, fingerprint []byte) error {
+	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -21,8 +22,9 @@ func SendPipe(ctx context.Context, addr string) error {
 }
 
 // SendPipeNAT は NAT Traversal 済みソケット経由で stdin を送信する。
-func SendPipeNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr) error {
-	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLS(), quicConfig())
+// fingerprint が非 nil の場合は TLS ピンニングを行い、nil の場合は自己署名チェックのみ行う。
+func SendPipeNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, fingerprint []byte) error {
+	conn, err := quic.Dial(ctx, udpConn, peerAddr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
