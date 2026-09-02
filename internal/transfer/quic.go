@@ -10,11 +10,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -236,47 +238,76 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 
 // checkDirDone は outDir 内の既存ファイルを FileMeta リストと照合し、
 // ハッシュが一致する（転送完了済みの）ファイルの相対パス一覧を返す。
+// #505: worker pool (runtime.NumCPU() 幅) でゴルーチン数・FD 数を制限する。
+// ファイル数だけ goroutine を無制限生成すると FD 枯渇・I/O 過飽和を招くため、
+// WalkDir と同じ errgroup + buffered channel パターンを使用する。
 func checkDirDone(outDir string, files []FileMeta) []string {
 	if len(files) == 0 {
 		return nil
 	}
-	type result struct {
-		path string
-		done bool
+
+	type job struct {
+		idx int
+		fm  FileMeta
 	}
-	results := make([]result, len(files))
-	var wg sync.WaitGroup
+
+	// ハッシュ不明エントリを除いたジョブリストを構築する。
+	jobs := make([]job, 0, len(files))
 	for i, fm := range files {
 		if fm.Hash == "" {
 			continue // ハッシュ不明はスキップ判定不可
 		}
-		wg.Add(1)
-		go func(i int, fm FileMeta) {
-			defer wg.Done()
-			absPath := filepath.Join(outDir, fm.Path)
-			f, err := os.Open(absPath)
-			if err != nil {
-				return // ファイルが存在しない → 未完了
-			}
-			got, err := hashReader(f)
-			f.Close()
-			if err != nil {
-				return
-			}
-			if got == fm.Hash {
-				results[i] = result{path: fm.Path, done: true}
-			}
-		}(i, fm)
+		jobs = append(jobs, job{idx: i, fm: fm})
 	}
-	wg.Wait()
+	if len(jobs) == 0 {
+		return nil
+	}
 
-	var done []string
-	for _, r := range results {
-		if r.done {
-			done = append(done, r.path)
+	done := make([]bool, len(files))
+
+	concurrency := runtime.NumCPU()
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	jobCh := make(chan job, len(jobs))
+	for _, j := range jobs {
+		jobCh <- j
+	}
+	close(jobCh)
+
+	// context.Background() を使う: checkDirDone は接続確立フェーズで呼ばれ、
+	// 呼び出し元にキャンセル可能な context がないため。
+	g, _ := errgroup.WithContext(context.Background())
+	for w := 0; w < concurrency; w++ {
+		g.Go(func() error {
+			for j := range jobCh {
+				absPath := filepath.Join(outDir, j.fm.Path)
+				f, err := os.Open(absPath)
+				if err != nil {
+					continue // ファイルが存在しない → 未完了
+				}
+				got, err := hashReader(f)
+				f.Close()
+				if err != nil {
+					continue
+				}
+				if got == j.fm.Hash {
+					done[j.idx] = true
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // worker は error を返さない
+
+	var result []string
+	for i, fm := range files {
+		if done[i] {
+			result = append(result, fm.Path)
 		}
 	}
-	return done
+	return result
 }
 
 // --- single file send ---
