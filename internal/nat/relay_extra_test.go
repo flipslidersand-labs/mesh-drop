@@ -94,12 +94,17 @@ func TestRelaySlotRace_ThirdPeer(t *testing.T) {
 	const addrC = "10.0.0.3:33333"
 
 	// Complete a legitimate rendezvous first.
+	// readyA is closed just before peer A calls Rendezvous so that peer B only
+	// dials after the server has registered A's long-poll, removing the need for
+	// a fixed time.Sleep to sequence the two goroutines.
+	readyA := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
+		close(readyA)
 		_, err := Rendezvous(ts.URL, code, addrA)
 		errCh <- err
 	}()
-	time.Sleep(5 * time.Millisecond) // let A enter the long-poll first
+	<-readyA // wait until peer A's goroutine has started
 	if _, err := Rendezvous(ts.URL, code, addrB); err != nil {
 		t.Fatalf("peer B rendezvous error: %v", err)
 	}
@@ -474,12 +479,17 @@ func TestRendezvous_SessionDeletedAfterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// readyA is closed just before peer A calls Rendezvous so that peer B only
+	// dials after the server has registered A's long-poll, removing the need for
+	// a fixed time.Sleep to sequence the two goroutines.
+	readyA := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
+		close(readyA)
 		_, err := Rendezvous(ts.URL, code, "10.0.1.1:5001")
 		errCh <- err
 	}()
-	time.Sleep(5 * time.Millisecond)
+	<-readyA // wait until peer A's goroutine has started
 	if _, err := Rendezvous(ts.URL, code, "10.0.1.2:5002"); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +497,9 @@ func TestRendezvous_SessionDeletedAfterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	time.Sleep(10 * time.Millisecond)
+	// The session delete happens synchronously inside handleJoin before the
+	// HTTP response is written, so by the time both Rendezvous calls have
+	// returned the map entry is guaranteed to be gone — no sleep needed.
 	srv.mu.Lock()
 	_, exists := srv.sessions[code]
 	srv.mu.Unlock()

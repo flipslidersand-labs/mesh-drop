@@ -49,6 +49,23 @@ func freeUDPPort(t *testing.T) int {
 	return port
 }
 
+// waitUDPReady polls addr with UDP dials until the port is bound or the
+// deadline expires. It replaces unconditional time.Sleep calls so that CI
+// runners are not penalised by arbitrary fixed delays.
+func waitUDPReady(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("udp4", addr, 5*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("waitUDPReady: %s not reachable within %s", addr, timeout)
+}
+
 // startTestListener starts a ListenContinuous server on addr and returns the
 // TLSBundle, a cancel func, and a channel that receives the path of each
 // successfully received file.
@@ -65,8 +82,9 @@ func startTestListener(t *testing.T, addr, outDir string) (*TLSBundle, context.C
 			recv <- path
 		})
 	}()
-	// Give the listener time to bind.
-	time.Sleep(60 * time.Millisecond)
+	// Poll until the QUIC listener has bound the port instead of sleeping a
+	// fixed duration. This eliminates flaky failures on loaded CI runners.
+	waitUDPReady(t, addr, 5*time.Second)
 	return bundle, cancel, recv
 }
 
@@ -161,6 +179,8 @@ func TestIntegration_Directory_Send_Receive(t *testing.T) {
 	// ListenContinuous spawns a goroutine for the connection that outlives the
 	// parent loop; tracking it externally avoids a TOCTOU on the output files.
 	recvErr := make(chan error, 1)
+	// ready is closed once the QUIC listener has bound its port.
+	ready := make(chan struct{})
 	go func() {
 		ln, err := quic.ListenAddr(addr, bundle.Config, quicConfig())
 		if err != nil {
@@ -168,6 +188,7 @@ func TestIntegration_Directory_Send_Receive(t *testing.T) {
 			return
 		}
 		defer ln.Close()
+		close(ready)
 		conn, err := ln.Accept(ctx)
 		if err != nil {
 			recvErr <- err
@@ -175,7 +196,15 @@ func TestIntegration_Directory_Send_Receive(t *testing.T) {
 		}
 		recvErr <- dispatchConnToDir(ctx, conn, outDir, conn.RemoteAddr().String(), nil)
 	}()
-	time.Sleep(60 * time.Millisecond)
+	// Wait for the listener goroutine to signal it has bound the port before
+	// the sender dials. This replaces the previous time.Sleep(60ms).
+	select {
+	case <-ready:
+	case err := <-recvErr:
+		t.Fatalf("listener startup: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for listener to start")
+	}
 
 	if err := SendDir(ctx, addr, srcDir, 4, bundle.Fingerprint, nil, false, 0, false, nil); err != nil {
 		t.Fatalf("SendDir: %v", err)
