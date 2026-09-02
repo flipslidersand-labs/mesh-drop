@@ -666,6 +666,8 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDownload serves a received file for browser download.
+// After the file is served it is removed from the downloads map and disk
+// to prevent unbounded growth (#514).
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -683,6 +685,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// #258: mime.FormatMediaType で RFC 6266 準拠のエスケープを行う
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, path)
+	// #514: serve 完了後にエントリとディスクファイルを削除してメモリ・ディスク消費を防ぐ。
+	// HEAD リクエストではファイルを消費しない。
+	if r.Method == http.MethodGet {
+		s.dlMu.Lock()
+		delete(s.downloads, id)
+		s.dlMu.Unlock()
+		os.Remove(path) //nolint:errcheck
+	}
 }
 
 // authMiddleware enforces optional Bearer-token authentication.
