@@ -37,6 +37,9 @@ func cmdUI() *cobra.Command {
 			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
 				port = globalCfg.Port
 			}
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("--port must be between 1 and 65535, got %d", port)
+			}
 			if cmd.Flags().Changed("auth-token") {
 				uiAuthToken = authToken
 			} else if globalCfg.AuthToken != "" {
