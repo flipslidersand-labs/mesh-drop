@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.23"
 
       - name: Run benchmarks
         run: go test -bench=. -benchmem -count=3 -timeout=300s ./... 2>&1 | tee /tmp/bench.txt
