@@ -135,7 +135,7 @@ func BenchmarkZstdEncode(b *testing.B) {
 	data := bytes.Repeat([]byte("benchmark data content here "), 1024) // ~29KB
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		var buf bytes.Buffer
 		enc, _ := newZstdEncoder(&buf, 0)
 		io.Copy(enc, bytes.NewReader(data)) //nolint:errcheck

@@ -104,7 +104,7 @@ func BenchmarkThrottledReader_NoLimit(b *testing.B) {
 	data := bytes.Repeat([]byte("b"), 1<<20)
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		src := bytes.NewReader(data)
 		r := NewThrottledReader(context.Background(), src, nil)
 		io.ReadAll(r) //nolint:errcheck
@@ -116,7 +116,7 @@ func BenchmarkThrottledReader_HighLimit(b *testing.B) {
 	lim := rate.NewLimiter(rate.Limit(10<<30), maxBurst) // 10 GB/s — 実質無制限
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		src := bytes.NewReader(data)
 		r := NewThrottledReader(context.Background(), src, lim)
 		io.ReadAll(r) //nolint:errcheck
