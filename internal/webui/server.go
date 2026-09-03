@@ -276,6 +276,10 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.timeout)
 	defer cancel()
 
@@ -641,6 +645,10 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
