@@ -24,6 +24,11 @@ func DeriveChunkStreamKey(encKey, decKey []byte, label string) ([]byte, error) {
 	ikm := make([]byte, 64)
 	copy(ikm[:32], encKey)
 	copy(ikm[32:], decKey)
+	defer func() {
+		for i := range ikm {
+			ikm[i] = 0
+		}
+	}()
 
 	r := hkdf.New(sha256.New, ikm, nil, []byte(label))
 	key := make([]byte, 32)
