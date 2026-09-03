@@ -415,10 +415,18 @@ func (s *RelayServer) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// handleJoin が一度も呼ばれない場合の TTL クリーンアップ。
 	// #186: TTL クリーンアップ時に sess.done を close してリソースを確実に解放する。
+	// #506: Stop() 呼び出し時に stopEvict をセレクトして TTL goroutine を即座に終了する。
 	go func() {
 		select {
 		case <-sess.done:
 			// 正常なランデブー完了またはタイムアウトで既に処理済み
+		case <-s.stopEvict:
+			// Stop() 呼び出し時：GC ブロックを防ぐためセッションを即座に解放する
+			s.mu.Lock()
+			delete(s.sessions, code)
+			s.decrementIPSessions(clientIP)
+			s.mu.Unlock()
+			sess.closeDone()
 		case <-time.After(sessionTTL):
 			s.mu.Lock()
 			delete(s.sessions, code)
