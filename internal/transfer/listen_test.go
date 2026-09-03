@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,7 +30,7 @@ func TestListenContinuous_InvalidAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ListenContinuous(t.Context(), "256.256.256.256:9", bundle, t.TempDir(), nil)
+	err = ListenContinuous(context.Background(), "256.256.256.256:9", bundle, t.TempDir(), nil)
 	if err == nil {
 		t.Fatal("expected error for invalid addr")
 	}
