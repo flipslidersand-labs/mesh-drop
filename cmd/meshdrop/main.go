@@ -194,6 +194,9 @@ func cmdReceive() *cobra.Command {
 			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
 				port = globalCfg.Port
 			}
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("--port must be between 1 and 65535, got %d", port)
+			}
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -335,7 +338,7 @@ func cmdSend() *cobra.Command {
 			if relayURL != "" && (sendAll || sendTo != "") {
 				return fmt.Errorf("--all/--to cannot be used with --relay (NAT mode supports one peer at a time)")
 			}
-			if relayURL != "" && code == "" && !pipe {
+			if relayURL != "" && code == "" {
 				return fmt.Errorf("--code is required with --relay")
 			}
 
@@ -356,9 +359,6 @@ func cmdSend() *cobra.Command {
 					return fmt.Errorf("--all/--to cannot be used with --pipe (stdin can only be read once)")
 				}
 				if relayURL != "" {
-					if code == "" {
-						return fmt.Errorf("--code is required with --relay")
-					}
 					return sendPipeNAT(ctx, relayURL, code)
 				}
 				peer, err := discoverAndSelect(ctx, timeout)
@@ -383,9 +383,6 @@ func cmdSend() *cobra.Command {
 			if relayURL != "" {
 				if sendAll || sendTo != "" {
 					return fmt.Errorf("--all/--to cannot be used with --relay (NAT mode supports one peer at a time)")
-				}
-				if code == "" {
-					return fmt.Errorf("--code is required with --relay")
 				}
 				return sendNAT(ctx, relayURL, code, target, chunks, fingerprint, lim, compress, compressLevel, noResume)
 			}
