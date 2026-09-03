@@ -28,11 +28,11 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("integration: GenerateKeypair: " + err.Error())
 	}
-	initMu.Lock()
-	sessionIdentity = key
-	sessionInited = true
-	// sessionPeers stays nil → TOFU skipped
-	initMu.Unlock()
+	defaultSession.mu.Lock()
+	defaultSession.identity = key
+	defaultSession.inited = true
+	// defaultSession.peers stays nil → TOFU skipped
+	defaultSession.mu.Unlock()
 	os.Exit(m.Run())
 }
 
