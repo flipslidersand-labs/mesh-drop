@@ -359,14 +359,22 @@ func cmdSend() *cobra.Command {
 					return fmt.Errorf("--all/--to cannot be used with --pipe (stdin can only be read once)")
 				}
 				if relayURL != "" {
-					return sendPipeNAT(ctx, relayURL, code)
+					if code == "" {
+						return fmt.Errorf("--code is required with --relay")
+					}
+					return sendPipeNAT(ctx, relayURL, code, fingerprint)
 				}
 				peer, err := discoverAndSelect(ctx, timeout)
 				if err != nil {
 					return err
 				}
+				effectiveFingerprint := fingerprint
+				if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
+					fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+					effectiveFingerprint = peer.Fingerprint
+				}
 				fmt.Printf("→ Connecting to %s (%s) [pipe]...\n", peer.Name, peer.Addr())
-				return transfer.SendPipe(ctx, peer.Addr())
+				return transfer.SendPipe(ctx, peer.Addr(), effectiveFingerprint)
 			}
 
 			if len(args) == 0 {
@@ -675,7 +683,7 @@ func parseRateLimit(s string) (*rate.Limiter, error) {
 	return lim, nil
 }
 
-func sendPipeNAT(ctx context.Context, relayURL, code string) error {
+func sendPipeNAT(ctx context.Context, relayURL, code string, fingerprint []byte) error {
 	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
@@ -707,7 +715,7 @@ func sendPipeNAT(ctx context.Context, relayURL, code string) error {
 
 	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
-	return transfer.SendPipeNAT(ctx, udpConn, peerUDP)
+	return transfer.SendPipeNAT(ctx, udpConn, peerUDP, fingerprint)
 }
 
 // --- info ---
