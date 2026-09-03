@@ -328,8 +328,8 @@ func TestSanitizeName_RejectsControlChars(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := sanitizeName(tc.input); err == nil {
-				t.Errorf("sanitizeName(%q) = nil, want error", tc.input)
+			if err := SanitizeName(tc.input); err == nil {
+				t.Errorf("SanitizeName(%q) = nil, want error", tc.input)
 			}
 		})
 	}
@@ -345,8 +345,8 @@ func TestSanitizeName_AcceptsValidNames(t *testing.T) {
 		"file-name_with.punctuation (1).tar.gz",
 	}
 	for _, name := range cases {
-		if err := sanitizeName(name); err != nil {
-			t.Errorf("sanitizeName(%q) = %v, want nil", name, err)
+		if err := SanitizeName(name); err != nil {
+			t.Errorf("SanitizeName(%q) = %v, want nil", name, err)
 		}
 	}
 }

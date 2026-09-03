@@ -228,7 +228,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
 	outPath := filepath.Base(meta.Name)
-	if err := sanitizeName(outPath); err != nil {
+	if err := SanitizeName(outPath); err != nil {
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
 	}
 	cp := loadOrCreate(outPath, meta)
@@ -533,7 +533,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 
 	outPath := filepath.Join(outDir, filepath.Base(meta.Name))
-	if err := sanitizeName(filepath.Base(meta.Name)); err != nil {
+	if err := SanitizeName(filepath.Base(meta.Name)); err != nil {
 		return fmt.Errorf("invalid file name in metadata: %w", err)
 	}
 	tmpPath := outPath + ".meshdrop.tmp"
