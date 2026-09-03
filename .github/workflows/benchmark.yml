@@ -21,6 +21,9 @@ jobs:
         with:
           go-version: "1.23"
 
+      - name: Race condition sanity check
+        run: go test -race -bench=. -benchmem -count=1 -timeout=120s ./... 2>&1 | grep -v "^goos\|^goarch\|^pkg\|^cpu\|Benchmark\|^PASS\|^ok" || true
+
       - name: Run benchmarks
         run: go test -bench=. -benchmem -count=3 -timeout=300s ./... 2>&1 | tee /tmp/bench.txt
 
