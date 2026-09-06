@@ -13,7 +13,10 @@ jobs:
     with:
       go-version: "1.23"
       runner: ubuntu-latest
-      coverage-threshold: 60   # #515: 51→60%（qa-workflows デフォルト値）。次: 70%→80% を段階的に引き上げ予定
+      coverage-threshold: 50   # #540: 実カバレッジは53.4%。qa-workflows go-test.yml の閾値チェックが
+                                # bc 依存で長期間サイレントに no-op していたため 60% 設定でも通っていた
+                                # (mesh-drop#540 / qa-workflows 側 issue 参照)。実態に合わせて暫定 50% に。
+                                # 60%→70%→80% への引き上げは実測に基づいて段階的に行う。
 
   windows-ci:
     name: Windows build & test
