@@ -475,3 +475,7 @@ func TestHandleJoin_SecondPeerAfterTimeout(t *testing.T) {
 		t.Errorf("expected 410 Gone for expired session, got %d", resp.StatusCode)
 	}
 }
+
+func TestIssue778BranchProtectionVerification(t *testing.T) {
+	t.Fatal("intentional failure for issue 778 branch protection verification")
+}
