@@ -271,7 +271,11 @@ func TestAuthMiddleware_NoCredentials_Returns401(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_QueryParamToken(t *testing.T) {
+func TestAuthMiddleware_QueryParamToken_Returns401(t *testing.T) {
+	// #504: クエリパラメータ認証は RFC 6750 Section 2.3 により意図的に廃止済み。
+	// URL にトークンが残ると access log / browser history / Referer に平文露出するため、
+	// ?token= を渡しても Authorization ヘッダが無ければ 401 になるのが正しい挙動。
+	// (旧テストは廃止前の仕様のまま 200 を期待しており #504 後は fail していた)
 	const token = "s3cr3t"
 	h := authMiddleware(token, newOKHandler())
 
@@ -279,21 +283,8 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-}
-
-func TestAuthMiddleware_WrongQueryParam_Returns401(t *testing.T) {
-	const token = "s3cr3t"
-	h := authMiddleware(token, newOKHandler())
-
-	req := httptest.NewRequest(http.MethodGet, "/?token=wrong", nil)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-
 	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rr.Code)
+		t.Fatalf("expected 401 (query-param auth is unsupported), got %d", rr.Code)
 	}
 }
 
