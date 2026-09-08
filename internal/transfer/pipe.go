@@ -102,13 +102,13 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // dispatchConn から IsPipe=true のとき呼ばれる。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
 func doReceivePipeConn(ctx context.Context, conn *quic.Conn, peerKey []byte) error {
-	defer conn.CloseWithError(0, "done")
+	defer func() { _ = conn.CloseWithError(0, "done") }()
 
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return fmt.Errorf("accept pipe stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {
