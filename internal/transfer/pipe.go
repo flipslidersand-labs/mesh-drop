@@ -32,7 +32,7 @@ func SendPipeNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAdd
 }
 
 func doSendPipe(ctx context.Context, conn *quic.Conn) error {
-	defer conn.CloseWithError(0, "done")
+	defer func() { _ = conn.CloseWithError(0, "done") }()
 
 	meta := Meta{Name: "stdin", Size: -1, Chunks: 1, IsPipe: true}
 	peerKey, err := sendMeta(ctx, conn, meta)
@@ -44,7 +44,7 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 	if err != nil {
 		return fmt.Errorf("pipe stream open: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
@@ -70,7 +70,7 @@ func ListenPipe(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	fmt.Fprintf(os.Stderr, "Waiting for pipe on %s ...\n", ln.Addr())
 	conn, err := ln.Accept(ctx)
 	if err != nil {
@@ -90,7 +90,7 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 	if err != nil {
 		return fmt.Errorf("QUIC listen on conn: %w", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	conn, err := ln.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)

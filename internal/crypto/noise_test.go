@@ -132,7 +132,7 @@ func TestNoiseStream_LargePayload(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		initStream.Write(payload)
+		_, _ = initStream.Write(payload)
 	}()
 
 	got := make([]byte, len(payload))

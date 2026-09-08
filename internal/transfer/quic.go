@@ -595,7 +595,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		}
 		if meta.Hash != "" && got != meta.Hash {
 			cp.finish()
-			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+			return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 		}
 		cp.finish()
 		if err := os.Rename(tmpPath, outPath); err != nil {
@@ -678,7 +678,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 	if meta.Hash != "" && got != meta.Hash {
 		cp.finish()
-		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+		return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 	}
 	cp.finish()
 	// #359: ハッシュ検証成功後にアトミックリネームで最終パスへ移動する。
