@@ -38,7 +38,7 @@ func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDi
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	sem := make(chan struct{}, maxConcurrentConns)
 

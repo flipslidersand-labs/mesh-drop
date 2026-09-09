@@ -139,6 +139,6 @@ func BenchmarkZstdEncode(b *testing.B) {
 		var buf bytes.Buffer
 		enc, _ := newZstdEncoder(&buf, 0)
 		io.Copy(enc, bytes.NewReader(data)) //nolint:errcheck
-		enc.Close()
+		enc.Close() //nolint:errcheck
 	}
 }

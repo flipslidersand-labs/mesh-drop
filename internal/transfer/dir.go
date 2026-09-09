@@ -246,7 +246,7 @@ func SendDirNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr
 
 // #317: progressFn は転送済みバイト数の更新を通知するコールバック。nil の場合は呼ばれない。
 func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
-	defer conn.CloseWithError(0, "done")
+	defer func() { _ = conn.CloseWithError(0, "done") }()
 	start := time.Now() // #269
 
 	fmt.Printf("Scanning %s ...\n", dirPath)
@@ -441,7 +441,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, f *os.File, idx int, a c
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", idx, err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
@@ -484,7 +484,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, f *os.File, idx int, a c
 // dirDone は送信側がスキップした完了済みファイルの相対パス一覧 (#245)。
 func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte, dirDone []string) (retErr error) {
 	if conn != nil {
-		defer conn.CloseWithError(0, "done")
+		defer func() { _ = conn.CloseWithError(0, "done") }()
 	}
 	start := time.Now() // #269
 
@@ -746,7 +746,7 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if err != nil {
 		return fmt.Errorf("accept chunk stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {
