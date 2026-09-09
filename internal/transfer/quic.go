@@ -143,7 +143,7 @@ func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, f
 // --- accept & dispatch ---
 
 func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	fmt.Printf("Waiting for transfer on %s ...\n", ln.Addr())
 	conn, err := ln.Accept(ctx)
 	if err != nil {
@@ -189,7 +189,7 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	if err != nil {
 		return Meta{}, nil, nil, nil, err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, peerKey, err := controlHandshakeResponder(ctx, stream)
 	if err != nil {
@@ -320,7 +320,7 @@ func checkDirDone(outDir string, files []FileMeta) []string {
 // t0: QUIC dial 呼び出し前、t1: QUIC 接続確立後の時刻。
 // Noise XX ハンドシェイク完了後の t2 は内部で計測し、debug ログに出力する。
 func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
-	defer conn.CloseWithError(0, "done")
+	defer func() { _ = conn.CloseWithError(0, "done") }()
 
 	if nChunks < 1 {
 		return fmt.Errorf("nChunks must be >= 1, got %d", nChunks)
@@ -465,7 +465,7 @@ func sendMetaGetResume(ctx context.Context, conn *quic.Conn, meta Meta) (ResumeS
 	if err != nil {
 		return ResumeState{}, nil, err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	tNoise := time.Now()
 	ns, peerKey, err := controlHandshakeInitiator(ctx, stream)
@@ -517,7 +517,7 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // #359: 一時ファイル (<outPath>.meshdrop.tmp) へ書き込み、ハッシュ検証成功後に
 // os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outDir string) (retErr error) {
-	defer conn.CloseWithError(0, "done")
+	defer func() { _ = conn.CloseWithError(0, "done") }()
 	// #330: Ensure cp.finish() is called on every exit path. The closure captures
 	// cp by reference so it sees the value assigned at line 448 when cp==nil on entry.
 	// finish() is idempotent: flush() is a no-op when not dirty, and os.Remove on a
@@ -595,7 +595,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		}
 		if meta.Hash != "" && got != meta.Hash {
 			cp.finish()
-			return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+			return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 		}
 		cp.finish()
 		if err := os.Rename(tmpPath, outPath); err != nil {
@@ -678,7 +678,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 	if meta.Hash != "" && got != meta.Hash {
 		cp.finish()
-		return fmt.Errorf("%w\n  want: %s...\n   got: %s...", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
+		return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 	}
 	cp.finish()
 	// #359: ハッシュ検証成功後にアトミックリネームで最終パスへ移動する。

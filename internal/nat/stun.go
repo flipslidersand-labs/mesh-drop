@@ -84,7 +84,7 @@ func discoverExternalIP(stunServer string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("STUN dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		slog.Debug("STUN: SetDeadline", "err", err)
 	}

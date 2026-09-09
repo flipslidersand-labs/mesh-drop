@@ -258,7 +258,7 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 		slog.Debug("STUN via socket failed, trying fallback", "err", err)
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
-			udpConn.Close()
+			_ = udpConn.Close()
 			return fmt.Errorf("STUN: %w", e2)
 		}
 		externalAddr = fmt.Sprintf("%s:%d", ip, port)
@@ -271,14 +271,14 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 	fmt.Println("Waiting for sender (up to 60s)...")
 	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("rendezvous: %w", err)
 	}
 	fmt.Printf("Sender found: %s\n", peerAddr)
 
 	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
@@ -639,7 +639,7 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 		slog.Debug("STUN via socket failed, trying fallback", "err", err)
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
-			udpConn.Close()
+			_ = udpConn.Close()
 			return fmt.Errorf("STUN: %w", e2)
 		}
 		externalAddr = fmt.Sprintf("%s:%d", ip, localPort)
@@ -649,14 +649,14 @@ func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fi
 	fmt.Printf("Connecting to relay (code=%s)...\n", code)
 	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("rendezvous: %w", err)
 	}
 	fmt.Printf("Receiver found: %s\n", peerAddr)
 
 	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 

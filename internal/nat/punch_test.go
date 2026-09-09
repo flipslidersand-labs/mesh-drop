@@ -18,7 +18,7 @@ func openUDPPair(t *testing.T) (*net.UDPConn, *net.UDPAddr, *net.UDPConn, *net.U
 	}
 	connB, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
-		connA.Close()
+		_ = connA.Close()
 		t.Fatalf("ListenUDP B: %v", err)
 	}
 
@@ -31,7 +31,7 @@ func openUDPPair(t *testing.T) (*net.UDPConn, *net.UDPAddr, *net.UDPConn, *net.U
 // the context is cancelled, even if maxPackets have not been sent yet.
 func TestHolePunch_ContextCancel(t *testing.T) {
 	connA, _, _, addrB := openUDPPair(t)
-	defer connA.Close()
+	defer func() { _ = connA.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -57,8 +57,8 @@ func TestHolePunch_ContextCancel(t *testing.T) {
 // and then returns when the context is not cancelled.
 func TestHolePunch_MaxPackets(t *testing.T) {
 	connA, _, connB, addrB := openUDPPair(t)
-	defer connA.Close()
-	defer connB.Close()
+	defer func() { _ = connA.Close() }()
+	defer func() { _ = connB.Close() }()
 
 	const maxPackets = 5
 	ctx := context.Background()
@@ -69,7 +69,7 @@ func TestHolePunch_MaxPackets(t *testing.T) {
 	go func() {
 		buf := make([]byte, 16)
 		for {
-			connB.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_ = connB.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 			n, _, err := connB.ReadFromUDP(buf)
 			if err != nil {
 				return
@@ -113,7 +113,7 @@ done:
 // TestHolePunch_ZeroCount verifies that HolePunch with count=0 returns immediately.
 func TestHolePunch_ZeroCount(t *testing.T) {
 	connA, _, _, addrB := openUDPPair(t)
-	defer connA.Close()
+	defer func() { _ = connA.Close() }()
 
 	ctx := context.Background()
 	done := make(chan struct{})
@@ -134,8 +134,8 @@ func TestHolePunch_ZeroCount(t *testing.T) {
 // cancelled before HolePunch is called, it returns without sending any packets.
 func TestHolePunch_AlreadyCancelledContext(t *testing.T) {
 	connA, _, connB, addrB := openUDPPair(t)
-	defer connA.Close()
-	defer connB.Close()
+	defer func() { _ = connA.Close() }()
+	defer func() { _ = connB.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before calling HolePunch
@@ -144,7 +144,7 @@ func TestHolePunch_AlreadyCancelledContext(t *testing.T) {
 	go func() {
 		buf := make([]byte, 16)
 		for {
-			connB.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			_ = connB.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 			n, _, err := connB.ReadFromUDP(buf)
 			if err != nil {
 				return

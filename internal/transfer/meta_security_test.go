@@ -50,7 +50,7 @@ func TestReadMeta_OversizedFilename(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	// Write the actual length so readMeta tries to allocate it.
-	binary.Write(&buf, binary.BigEndian, uint32(len(b)))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(b)))
 	buf.Write(b)
 	if _, err := readMeta(&buf); err == nil {
 		t.Error("expected error for meta payload exceeding maxMetaLength, got nil")
@@ -179,7 +179,7 @@ func TestReadMeta_FileCountExceedsMax(t *testing.T) {
 		t.Skip("marshalled payload too large to reach file-count check; skipping")
 	}
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(len(b)))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(b)))
 	buf.Write(b)
 	_, err = readMeta(&buf)
 	if err == nil {
@@ -191,7 +191,7 @@ func TestReadMeta_FileCountExceedsMax(t *testing.T) {
 func TestReadMeta_MalformedJSON(t *testing.T) {
 	payload := []byte(`{"name":"x","size":1,"chunks":1,INVALID}`)
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(len(payload)))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(payload)))
 	buf.Write(payload)
 	_, err := readMeta(&buf)
 	if err == nil {
@@ -205,7 +205,7 @@ func TestReadMeta_TruncatedPayload(t *testing.T) {
 	payload := []byte(`{"name":"ok","size":1,"chunks":1}`)
 	var buf bytes.Buffer
 	// Declare a length larger than the actual payload.
-	binary.Write(&buf, binary.BigEndian, uint32(len(payload)+100))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(payload)+100))
 	buf.Write(payload) // only partial data
 	_, err := readMeta(&buf)
 	if err == nil {
@@ -217,7 +217,7 @@ func TestReadMeta_TruncatedPayload(t *testing.T) {
 // 4-byte length with no body returns an error.
 func TestReadMeta_LengthPrefixOnly(t *testing.T) {
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(42))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(42))
 	// Write no body.
 	_, err := readMeta(&buf)
 	if err == nil {
@@ -237,7 +237,7 @@ func TestReadMeta_EmptyStream(t *testing.T) {
 // exceeding maxMetaLength is rejected before allocation.
 func TestReadMeta_LengthExceedsMaxMetaLength(t *testing.T) {
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint32(maxMetaLength+1))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(maxMetaLength+1))
 	// No body needed; the check should fire on the length prefix alone.
 	_, err := readMeta(&buf)
 	if err == nil {

@@ -326,10 +326,9 @@ func TestHandshake_OversizedMessage_Rejected(t *testing.T) {
 
 	// Write an oversized frame (declared length = 5000, actual payload short).
 	oversizedLen := uint16(5000) // > maxHandshakeMsgLen (4096)
-	if err := writeOversizedHandshakeFrame(pw, oversizedLen, nil); err != nil {
-		// Pipe closed on the other side — responder already errored.
-	}
-	pw.Close()
+	// エラーは無視: Pipe closed on the other side — responder already errored のケースがある。
+	_ = writeOversizedHandshakeFrame(pw, oversizedLen, nil)
+	_ = pw.Close()
 
 	err = <-done
 	if err == nil {
