@@ -30,3 +30,15 @@ jobs:
         with:
           version: latest
           only-new-issues: true
+
+  dependabot-labels:
+    name: dependabot.yml label check
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify dependabot.yml labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check-dependabot-labels.sh
