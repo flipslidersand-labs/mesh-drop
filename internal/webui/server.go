@@ -326,6 +326,25 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // Declared as a package-level var so tests can override it without sending 512 MiB.
 var maxSingleFileUpload = int64(512 << 20) // 512 MiB (#257)
 
+// parseCompressLevel parses the "compress_level" form value, matching the
+// CLI's --compress-level range (0=default(3), 1=fastest..9=best; #559).
+// An empty value returns the default (0) with no error. A non-numeric or
+// out-of-range value returns an error describing the valid range.
+func parseCompressLevel(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.FormValue("compress_level"))
+	if raw == "" {
+		return 0, nil
+	}
+	level, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("compress_level must be an integer, got %q", raw)
+	}
+	if level < 0 || level > 9 {
+		return 0, fmt.Errorf("compress_level must be between 0 and 9, got %d", level)
+	}
+	return level, nil
+}
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -385,7 +404,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Optional: rate-limit and compression settings (#239).
 	rateLimitStr := strings.TrimSpace(r.FormValue("rate_limit"))
 	compress := r.FormValue("compress") == "true"
-	compLevel, _ := strconv.Atoi(r.FormValue("compress_level"))
+	compLevel, compLevelErr := parseCompressLevel(r)
+	if compLevelErr != nil {
+		os.Remove(tmp.Name())
+		http.Error(w, compLevelErr.Error(), http.StatusBadRequest)
+		return
+	}
 
 	lim, limErr := transfer.ParseRateLimit(rateLimitStr)
 	if limErr != nil {
@@ -515,7 +539,11 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 
 	rateLimitStr := strings.TrimSpace(r.FormValue("rate_limit"))
 	compress := r.FormValue("compress") == "true"
-	compLevel, _ := strconv.Atoi(r.FormValue("compress_level"))
+	compLevel, compLevelErr := parseCompressLevel(r)
+	if compLevelErr != nil {
+		http.Error(w, compLevelErr.Error(), http.StatusBadRequest)
+		return
+	}
 	lim, limErr := transfer.ParseRateLimit(rateLimitStr)
 	if limErr != nil {
 		http.Error(w, limErr.Error(), http.StatusBadRequest)
