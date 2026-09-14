@@ -387,6 +387,9 @@ func cmdSend() *cobra.Command {
 			if chunks < 1 {
 				return fmt.Errorf("--chunks must be >= 1")
 			}
+			if compressLevel < 0 || compressLevel > 9 {
+				return fmt.Errorf("--compress-level must be between 0 and 9, got %d", compressLevel)
+			}
 
 			if relayURL != "" {
 				if sendAll || sendTo != "" {
