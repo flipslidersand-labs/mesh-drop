@@ -13,6 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # only-new-issues: true が push イベントで正しく差分計算するには
+          # フル履歴が必要(shallow clone のデフォルトでは前コミットとの diff base が
+          # 取得できず、既存の lint 違反まで "新規" として fail することがある)。
+          # PR イベントは GitHub API 経由で base との diff を取れるため影響を受けず、
+          # 同一コミットで push/pull_request の結果が食い違う flaky 挙動の原因だった。
+          fetch-depth: 0
 
       - uses: actions/setup-go@v7
         with:
