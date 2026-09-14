@@ -76,7 +76,7 @@ func cmdUI() *cobra.Command {
 	cmd.Flags().IntVarP(&port, "port", "p", 8765, "HTTP listen port")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open browser automatically")
 	cmd.Flags().DurationVar(&discoverTimeout, "discover", 3*time.Second, "peer discovery timeout per poll")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "require Bearer token or ?token= query param to access the Web UI (empty = no auth)")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "require a Bearer token (Authorization header) to access the Web UI (empty = no auth)")
 	return cmd
 }
 
