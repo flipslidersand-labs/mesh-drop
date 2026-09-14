@@ -7,7 +7,7 @@ require (
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/klauspost/compress v1.20.0
 	github.com/quic-go/quic-go v0.54.1
-	github.com/schollz/progressbar/v3 v3.19.0
+	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sync v0.23.0
