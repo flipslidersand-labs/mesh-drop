@@ -50,7 +50,7 @@ func TestSendNAT_DialError_ContextDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udpConn.Close()
+	defer func() { _ = udpConn.Close() }()
 	peerAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}
 
 	err = SendNAT(ctx, udpConn, peerAddr, "/nonexistent", 4, nil, nil, false, 0, false)
@@ -68,7 +68,7 @@ func TestSendDirNAT_DialError_ContextDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udpConn.Close()
+	defer func() { _ = udpConn.Close() }()
 	peerAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}
 
 	err = SendDirNAT(ctx, udpConn, peerAddr, "/nonexistent", 4, nil, nil, false, 0, false, nil)
@@ -91,7 +91,7 @@ func TestListenNAT_ContextCancelledImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udpConn.Close()
+	defer func() { _ = udpConn.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
