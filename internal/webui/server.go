@@ -359,6 +359,16 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parse form: "+err.Error(), status)
 		return
 	}
+	// #568: parts exceeding the in-memory threshold are spilled to OS temp
+	// files by mime/multipart and are never cleaned up unless RemoveAll is
+	// called. All uses of r.MultipartForm below happen synchronously before
+	// this handler returns, so it's safe to clean up here even though the
+	// actual transfer runs in a background goroutine off its own copy.
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
 	peerAddr := r.FormValue("peer")
 	if peerAddr == "" {
 		http.Error(w, "peer is required", http.StatusBadRequest)
@@ -517,6 +527,15 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parse form: "+err.Error(), status)
 		return
 	}
+	// #568: see the identical comment in handleSend — all uses of
+	// r.MultipartForm below happen synchronously before this handler
+	// returns (files are copied into tmpDir before the background
+	// goroutine starts), so cleaning up here is safe.
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
 	peerAddr := r.FormValue("peer")
 	if peerAddr == "" {
 		http.Error(w, "peer is required", http.StatusBadRequest)
