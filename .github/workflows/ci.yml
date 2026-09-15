@@ -13,10 +13,14 @@ jobs:
     with:
       go-version: "1.23"
       runner: ubuntu-latest
-      coverage-threshold: 50   # #540: 実カバレッジは53.4%。qa-workflows go-test.yml の閾値チェックが
-                                # bc 依存で長期間サイレントに no-op していたため 60% 設定でも通っていた
-                                # (mesh-drop#540 / qa-workflows 側 issue 参照)。実態に合わせて暫定 50% に。
-                                # 60%→70%→80% への引き上げは実測に基づいて段階的に行う。
+      coverage-threshold: 55   # #542: cmd/meshdrop と internal/transfer にテストを追加し
+                                # 53.4%→56.6%まで引き上げ。安全マージンを見て55に設定。
+                                # internal/transfer の残り未カバー領域（doSend/doReceiveFile 等の
+                                # QUIC ストリーム内部処理）は defaultSession のテスト分離規約
+                                # （package-level Send/Listen は共有グローバルを使うため、
+                                # 非 integration タグの並列テストと安全に共存できない）により
+                                # integration タグ側のテストでのみ現実的にカバー可能。
+                                # 60%への到達は defaultSession のテスト容易性改善（別Issue）後に見込む。
 
   windows-ci:
     name: Windows build & test
@@ -27,7 +31,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
 
       - name: Build
         shell: bash
@@ -42,12 +46,12 @@ jobs:
           ./...
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
       - name: Run integration tests
         run: go test -race -tags integration -timeout 180s ./internal/transfer/...
 

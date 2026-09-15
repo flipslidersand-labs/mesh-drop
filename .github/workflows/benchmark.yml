@@ -10,7 +10,7 @@ on:
 jobs:
   benchmark:
     name: Run benchmarks
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
@@ -19,10 +19,16 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
 
       - name: Race condition sanity check
-        run: go test -race -bench=. -benchmem -count=1 -timeout=120s ./... 2>&1 | grep -v "^goos\|^goarch\|^pkg\|^cpu\|Benchmark\|^PASS\|^ok" || true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -bench=. -benchmem -count=1 -timeout=120s ./... 2>&1 | tee /tmp/race.txt
+          status=$?
+          grep -v "^goos\|^goarch\|^pkg\|^cpu\|Benchmark\|^PASS\|^ok" /tmp/race.txt || true
+          exit "$status"
 
       - name: Run benchmarks
         run: go test -bench=. -benchmem -count=3 -timeout=300s ./... 2>&1 | tee /tmp/bench.txt

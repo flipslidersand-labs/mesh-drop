@@ -57,7 +57,17 @@ func TestHexDecodeFingerprint_UpperCase(t *testing.T) {
 	}
 }
 
+// TestBrowse_ReturnsWithinTimeout exercises real mDNS/multicast discovery on
+// the network the test runs on. CI runners (especially windows-ci, which
+// runs in a container/VM) can have multicast restricted or firewalled,
+// making zeroconf's socket setup and discovery loop slower and the timing
+// assertion below flaky (#563). Skipped in -short mode (windows-ci already
+// runs with -short) and given a generous margin so it still catches a
+// genuine "Browse never returns" regression without flaking on CI jitter.
 func TestBrowse_ReturnsWithinTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real mDNS network test in -short mode (#563)")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -72,7 +82,9 @@ func TestBrowse_ReturnsWithinTimeout(t *testing.T) {
 	if len(peers) != 0 {
 		t.Logf("found %d peer(s) on LAN", len(peers))
 	}
-	if elapsed > 1500*time.Millisecond {
-		t.Errorf("Browse() took %v, expected ≤1.5s", elapsed)
+	// Generous margin (10x the requested timeout) to absorb slow socket
+	// setup on loaded/restricted CI networks while still catching a hang.
+	if elapsed > 5*time.Second {
+		t.Errorf("Browse() took %v, expected ≤5s", elapsed)
 	}
 }

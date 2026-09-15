@@ -335,6 +335,33 @@ func TestSanitizeName_RejectsControlChars(t *testing.T) {
 	}
 }
 
+// TestSanitizeName_RejectsWindowsReservedDeviceNames verifies DOS/Windows
+// device names are rejected regardless of case, extension, or whether they
+// appear as the final component or an intermediate directory component (#562).
+func TestSanitizeName_RejectsWindowsReservedDeviceNames(t *testing.T) {
+	cases := []string{
+		"CON",
+		"con",
+		"NUL.txt",
+		"nul.TXT",
+		"PRN.tar.gz",
+		"AUX",
+		"COM1",
+		"com9.log",
+		"LPT1",
+		"lpt9.dat",
+		"subdir/CON.txt",
+		"CON/file.txt",
+	}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := SanitizeName(name); err == nil {
+				t.Errorf("SanitizeName(%q) = nil, want error (reserved device name)", name)
+			}
+		})
+	}
+}
+
 // TestSanitizeName_AcceptsValidNames verifies normal filenames are accepted.
 func TestSanitizeName_AcceptsValidNames(t *testing.T) {
 	cases := []string{
@@ -343,6 +370,11 @@ func TestSanitizeName_AcceptsValidNames(t *testing.T) {
 		"日本語.txt",
 		"file name with spaces.zip",
 		"file-name_with.punctuation (1).tar.gz",
+		// Not reserved: base name doesn't exactly equal a reserved device name.
+		"Console.txt",
+		"iCON.txt",
+		"COM10.log",
+		"LPT.txt",
 	}
 	for _, name := range cases {
 		if err := SanitizeName(name); err != nil {

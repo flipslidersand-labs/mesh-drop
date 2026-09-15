@@ -131,6 +131,29 @@ func readChunkMeta(r io.Reader) (ChunkMeta, error) {
 // sanitizeName は名前文字列に制御文字・null バイト・不正 UTF-8・絶対パス・
 // パストラバーサル（..）が含まれないかを検証する。
 // ログ汚染やファイルシステムの予期しない挙動を防ぐ (#325, #348)。
+// windowsReservedDeviceNames are the DOS/Windows device names that cannot be
+// used as a file name component regardless of extension (e.g. "NUL.txt" is
+// just as reserved as "NUL"). See #562: opening one of these on Windows
+// resolves to the device, not a regular file, which can hang or write to the
+// wrong place instead of the intended on-disk destination.
+var windowsReservedDeviceNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// isWindowsReservedDeviceName reports whether a single path component names a
+// reserved DOS/Windows device, ignoring case and any extension.
+func isWindowsReservedDeviceName(component string) bool {
+	base := component
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	return windowsReservedDeviceNames[strings.ToUpper(base)]
+}
+
 func SanitizeName(s string) error {
 	if !utf8.ValidString(s) {
 		return fmt.Errorf("name contains invalid UTF-8: %q", s)
@@ -145,10 +168,16 @@ func SanitizeName(s string) error {
 	if filepath.IsAbs(s) || strings.HasPrefix(s, "/") {
 		return fmt.Errorf("name must not be an absolute path: %q", s)
 	}
-	// Reject any path component that is ".." (directory escape).
+	// Reject any path component that is ".." (directory escape) or a
+	// reserved Windows device name (#562), regardless of which OS is
+	// currently running — the receiver may be on Windows even if the
+	// sender isn't.
 	for _, part := range strings.Split(filepath.ToSlash(s), "/") {
 		if part == ".." {
 			return fmt.Errorf("name contains path traversal component: %q", s)
+		}
+		if isWindowsReservedDeviceName(part) {
+			return fmt.Errorf("name contains a reserved device name component %q: %q", part, s)
 		}
 	}
 	return nil

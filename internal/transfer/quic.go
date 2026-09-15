@@ -704,7 +704,7 @@ func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offs
 	if err != nil {
 		return fmt.Errorf("chunk %d open: %w", index, err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
@@ -763,7 +763,7 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("accept chunk stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
 	if err != nil {

@@ -370,7 +370,7 @@ func cmdSend() *cobra.Command {
 				}
 				effectiveFingerprint := fingerprint
 				if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
-					fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+					fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:min(8, len(peer.Fingerprint))])
 					effectiveFingerprint = peer.Fingerprint
 				}
 				fmt.Printf("→ Connecting to %s (%s) [pipe]...\n", peer.Name, peer.Addr())
@@ -386,6 +386,9 @@ func cmdSend() *cobra.Command {
 			}
 			if chunks < 1 {
 				return fmt.Errorf("--chunks must be >= 1")
+			}
+			if compressLevel < 0 || compressLevel > 9 {
+				return fmt.Errorf("--compress-level must be between 0 and 9, got %d", compressLevel)
 			}
 
 			if relayURL != "" {
@@ -428,7 +431,7 @@ func cmdSend() *cobra.Command {
 			// out-of-band exchange.
 			effectiveFingerprint := fingerprint
 			if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
-				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:min(8, len(peer.Fingerprint))])
 				effectiveFingerprint = peer.Fingerprint
 			}
 
@@ -695,7 +698,7 @@ func sendPipeNAT(ctx context.Context, relayURL, code string, fingerprint []byte)
 	if err != nil {
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
-			udpConn.Close()
+			_ = udpConn.Close()
 			return fmt.Errorf("STUN: %w", e2)
 		}
 		externalAddr = fmt.Sprintf("%s:%d", ip, localPort)
@@ -703,13 +706,13 @@ func sendPipeNAT(ctx context.Context, relayURL, code string, fingerprint []byte)
 
 	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("rendezvous: %w", err)
 	}
 
 	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
 	if err != nil {
-		udpConn.Close()
+		_ = udpConn.Close()
 		return fmt.Errorf("parse peer addr: %w", err)
 	}
 
