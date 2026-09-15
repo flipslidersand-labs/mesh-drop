@@ -91,8 +91,11 @@ func clientTLSPinned(expectedFingerprint []byte) *tls.Config {
 			}
 			sum := sha256.Sum256(rawCerts[0])
 			if !bytes.Equal(sum[:], expectedFingerprint) {
+				// #564: expectedFingerprint may come from an unvalidated,
+				// attacker-controlled mDNS advertisement and can be shorter
+				// than 8 bytes — bound the slice to avoid a panic here.
 				return fmt.Errorf("TLS: certificate fingerprint mismatch — possible MITM (got %x, want %x)",
-					sum[:8], expectedFingerprint[:8])
+					sum[:8], expectedFingerprint[:min(8, len(expectedFingerprint))])
 			}
 			cert, err := x509.ParseCertificate(rawCerts[0])
 			if err != nil {

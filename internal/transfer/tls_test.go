@@ -171,6 +171,25 @@ func TestClientTLSPinned_FingerprintMismatch(t *testing.T) {
 	_ = serverFP2
 }
 
+// #564: a peer.Fingerprint from an untrusted mDNS advertisement can be
+// shorter than 8 bytes. The mismatch error path used to slice it
+// unconditionally with [:8], which panicked on such input.
+func TestClientTLSPinned_ShortExpectedFingerprint_NoPanic(t *testing.T) {
+	shortFP := []byte{0x01, 0x02, 0x03} // 3 bytes, well under 8
+	cfg := clientTLSPinned(shortFP)
+
+	cfgS, _, err := serverTLSAndFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDER := cfgS.Certificates[0].Certificate[0]
+
+	verifyErr := cfg.VerifyPeerCertificate([][]byte{rawDER}, nil)
+	if verifyErr == nil {
+		t.Error("want fingerprint mismatch error")
+	}
+}
+
 func TestClientTLSPinned_FingerprintMatch_ParseOk(t *testing.T) {
 	cfgServer, fp, err := serverTLSAndFingerprint()
 	if err != nil {
