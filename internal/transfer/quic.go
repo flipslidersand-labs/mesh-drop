@@ -227,10 +227,11 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	if meta.Name == "" || filepath.Base(meta.Name) == "." {
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %q", meta.Name)
 	}
-	outPath := filepath.Base(meta.Name)
-	if err := SanitizeName(outPath); err != nil {
+	baseName := filepath.Base(meta.Name)
+	if err := SanitizeName(baseName); err != nil {
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
 	}
+	outPath := filepath.Join(outDir, baseName)
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	if err := writeResumeState(ns, rs); err != nil {
