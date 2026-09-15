@@ -27,11 +27,11 @@ meshdrop send ./mydir/                  # directory: whole folder transfer
 
 ## Install
 
-**Download a pre-built binary** from [Releases](https://github.com/flipslidersand/mesh-drop/releases):
+**Download a pre-built binary** from [Releases](https://github.com/flipslidersand-labs/mesh-drop/releases):
 
 ```bash
 # Linux amd64
-curl -L https://github.com/flipslidersand/mesh-drop/releases/latest/download/meshdrop-linux-amd64 \
+curl -L https://github.com/flipslidersand-labs/mesh-drop/releases/latest/download/meshdrop-linux-amd64 \
   -o meshdrop && chmod +x meshdrop && sudo mv meshdrop /usr/local/bin/
 ```
 
