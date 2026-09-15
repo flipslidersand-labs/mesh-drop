@@ -370,7 +370,7 @@ func cmdSend() *cobra.Command {
 				}
 				effectiveFingerprint := fingerprint
 				if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
-					fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+					fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:min(8, len(peer.Fingerprint))])
 					effectiveFingerprint = peer.Fingerprint
 				}
 				fmt.Printf("→ Connecting to %s (%s) [pipe]...\n", peer.Name, peer.Addr())
@@ -431,7 +431,7 @@ func cmdSend() *cobra.Command {
 			// out-of-band exchange.
 			effectiveFingerprint := fingerprint
 			if len(effectiveFingerprint) == 0 && len(peer.Fingerprint) > 0 {
-				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:8])
+				fmt.Printf("  Auto-pinning TLS fingerprint from mDNS: %x\n", peer.Fingerprint[:min(8, len(peer.Fingerprint))])
 				effectiveFingerprint = peer.Fingerprint
 			}
 
