@@ -56,8 +56,22 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 		return fmt.Errorf("pipe chunk meta: %w", err)
 	}
 
-	_, err = io.Copy(ns, os.Stdin)
-	return err
+	copyDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(ns, os.Stdin)
+		copyDone <- copyErr
+	}()
+
+	select {
+	case err := <-copyDone:
+		return err
+	case <-ctx.Done():
+		// os.Stdin.Read はブロッキングI/Oでctxを認識しないため、io.Copy自体は
+		// stdinにデータが来るかクローズされるまで戻らない可能性がある。
+		// 接続を即座に閉じて呼び出し元を先に返し、QUIC接続のリークを防ぐ。
+		_ = conn.CloseWithError(0, "canceled")
+		return ctx.Err()
+	}
 }
 
 // ListenPipe は QUIC で接続を待ち受け、受信データを os.Stdout に書き出す。
