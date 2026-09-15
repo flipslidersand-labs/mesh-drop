@@ -111,24 +111,17 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 	}
 }
 
-// receiveFileToPath receives a single file into a private temp dir then renames it to outPath.
-// The temp dir is created in the same directory as outPath so that os.Rename is an atomic
-// same-filesystem move and never triggers EXDEV on cross-device paths (e.g. Docker volumes).
+// receiveFileToPath receives a single file directly into outDir (destDir of outPath).
+// doReceiveFileResume already writes to a "<outPath>.meshdrop.tmp" sibling file and
+// atomically os.Rename()s it to outPath on success, so no extra staging directory is
+// needed here. #570: an earlier version staged into a freshly MkdirTemp'd subdirectory
+// per call, which defeated resume — the checkpoint (keyed on outPath) could claim chunks
+// were already written, while the actual bytes lived in a *different*, already-deleted
+// temp directory from a prior attempt, causing hash mismatches on resume.
 func receiveFileToPath(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outPath string) error {
 	destDir := filepath.Dir(outPath)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
 	}
-	recvDir, err := os.MkdirTemp(destDir, "meshdrop-recv1-*")
-	if err != nil {
-		return fmt.Errorf("mkdir temp: %w", err)
-	}
-	defer os.RemoveAll(recvDir)
-
-	if err := doReceiveFileResume(ctx, conn, meta, cp, peerKey, recvDir); err != nil {
-		return err
-	}
-
-	src := filepath.Join(recvDir, filepath.Base(meta.Name))
-	return os.Rename(src, outPath)
+	return doReceiveFileResume(ctx, conn, meta, cp, peerKey, destDir)
 }
