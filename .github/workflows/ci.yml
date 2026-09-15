@@ -11,7 +11,7 @@ jobs:
   test:
     uses: flipslidersand-labs/qa-workflows/.github/workflows/go-test.yml@main
     with:
-      go-version: "1.23"
+      go-version: "1.26.0"
       runner: ubuntu-latest
       coverage-threshold: 55   # #542: cmd/meshdrop と internal/transfer にテストを追加し
                                 # 53.4%→56.6%まで引き上げ。安全マージンを見て55に設定。
