@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -95,7 +96,7 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 			var fingerprint []byte
 			for _, txt := range entry.Text {
 				if after, ok := strings.CutPrefix(txt, txtKeyFingerprint+"="); ok {
-					fp, err := hexDecodeFingerprint(after)
+					fp, err := hex.DecodeString(after)
 					if err == nil && len(fp) == 32 {
 						fingerprint = fp
 					}
@@ -119,35 +120,4 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 	<-browseCtx.Done()
 	<-done
 	return peers, nil
-}
-
-// hexDecodeFingerprint decodes a hex string into bytes.
-// Returns an error if the string is not valid hex.
-func hexDecodeFingerprint(s string) ([]byte, error) {
-	if len(s)%2 != 0 {
-		return nil, fmt.Errorf("odd hex length")
-	}
-	out := make([]byte, len(s)/2)
-	for i := 0; i < len(s); i += 2 {
-		hi, ok1 := hexNibble(s[i])
-		lo, ok2 := hexNibble(s[i+1])
-		if !ok1 || !ok2 {
-			return nil, fmt.Errorf("invalid hex char at position %d", i)
-		}
-		out[i/2] = (hi << 4) | lo
-	}
-	return out, nil
-}
-
-func hexNibble(c byte) (byte, bool) {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0', true
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10, true
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10, true
-	default:
-		return 0, false
-	}
 }
