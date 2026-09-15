@@ -13,14 +13,15 @@ jobs:
     with:
       go-version: "1.26.0"
       runner: ubuntu-latest
-      coverage-threshold: 55   # #542: cmd/meshdrop と internal/transfer にテストを追加し
-                                # 53.4%→56.6%まで引き上げ。安全マージンを見て55に設定。
-                                # internal/transfer の残り未カバー領域（doSend/doReceiveFile 等の
-                                # QUIC ストリーム内部処理）は defaultSession のテスト分離規約
-                                # （package-level Send/Listen は共有グローバルを使うため、
-                                # 非 integration タグの並列テストと安全に共存できない）により
-                                # integration タグ側のテストでのみ現実的にカバー可能。
-                                # 60%への到達は defaultSession のテスト容易性改善（別Issue）後に見込む。
+      coverage-threshold: 65   # #572: internal/transfer の doSend/doReceiveFile 等 QUIC ストリーム
+                                # 内部処理は defaultSession（パッケージスコープの共有グローバル）に
+                                # TestMain で固定 identity を一度だけ注入することで、非 integration
+                                # タグの通常テストからも安全にラウンドトリップ検証できるようになった
+                                # （roundtrip_test.go）。internal/transfer 49.0%→76.4%、全体
+                                # 57.1%→69.6%まで到達。安全マージンを見て65に設定。
+                                # 残る0%関数（SendPipeNAT/ListenPipeNAT/dispatchConn/doReceiveFile/
+                                # acceptChunk）はNAT実ソケット経由・CWD依存の旧互換経路で、
+                                # 個別にテスト追加する価値は低いため未対応。
 
   windows-ci:
     name: Windows build & test
