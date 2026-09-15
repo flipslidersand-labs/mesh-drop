@@ -24,7 +24,12 @@ func IdentityDir() string {
 func LoadOrCreateIdentity(dir string) (noise.DHKey, error) {
 	path := filepath.Join(dir, "id_x25519")
 	if data, err := os.ReadFile(path); err == nil && len(data) == 64 {
-		return noise.DHKey{Private: data[:32], Public: data[32:]}, nil
+		defer zeroBytes(data)
+		private := make([]byte, 32)
+		public := make([]byte, 32)
+		copy(private, data[:32])
+		copy(public, data[32:])
+		return noise.DHKey{Private: private, Public: public}, nil
 	}
 
 	key, err := noise.DH25519.GenerateKeypair(rand.Reader)
@@ -35,6 +40,7 @@ func LoadOrCreateIdentity(dir string) (noise.DHKey, error) {
 		return noise.DHKey{}, err
 	}
 	raw := make([]byte, 64)
+	defer zeroBytes(raw)
 	copy(raw[:32], key.Private)
 	copy(raw[32:], key.Public)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
