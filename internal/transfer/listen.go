@@ -21,6 +21,13 @@ const maxConcurrentConns = 32
 // completed transfer within this window is forcibly cancelled.
 const connTimeout = 5 * time.Minute
 
+// queueWaitTimeout bounds how long an accepted connection may wait for a
+// free concurrency slot before being rejected. Without this bound, clients
+// that hold their slot open without completing a transfer can make
+// unbounded numbers of later connections queue forever (DoS via slot
+// exhaustion).
+const queueWaitTimeout = 30 * time.Second
+
 // RecvCallback is called after each file is received successfully.
 // name is the original filename, path is the absolute on-disk location,
 // size is bytes written, peerAddr is the sender's QUIC address.
@@ -53,6 +60,9 @@ func ListenContinuous(ctx context.Context, addr string, bundle *TLSBundle, outDi
 			case sem <- struct{}{}:
 			case <-ctx.Done():
 				conn.CloseWithError(1, "server shutting down") //nolint:errcheck
+				return
+			case <-time.After(queueWaitTimeout):
+				conn.CloseWithError(1, "server busy") //nolint:errcheck
 				return
 			}
 			defer func() { <-sem }()
