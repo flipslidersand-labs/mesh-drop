@@ -599,6 +599,10 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 		}
 		cp.finish()
+		// #572: close tmpPath before renaming — Windows refuses to rename a
+		// file that still has an open handle (the deferred f.Close() above
+		// only runs after this function returns, too late for the rename).
+		_ = f.Close()
 		if err := os.Rename(tmpPath, outPath); err != nil {
 			return err
 		}
@@ -683,6 +687,10 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 	cp.finish()
 	// #359: ハッシュ検証成功後にアトミックリネームで最終パスへ移動する。
+	// #572: close tmpPath before renaming — Windows refuses to rename a file
+	// that still has an open handle (the deferred f.Close() above only runs
+	// after this function returns, too late for the rename).
+	_ = f.Close()
 	if err := os.Rename(tmpPath, outPath); err != nil {
 		return err
 	}
