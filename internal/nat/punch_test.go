@@ -91,19 +91,23 @@ func TestHolePunch_MaxPackets(t *testing.T) {
 		t.Errorf("HolePunch took %v, want <= %v", elapsed, maxExpected)
 	}
 
-	// Drain the channel and count packets. We may receive fewer than maxPackets
-	// if the OS drops some (loopback is generally reliable, but allow for it).
-	time.Sleep(50 * time.Millisecond) // let in-flight packets arrive
+	// #585: wait on the received channel instead of a fixed 50ms sleep — that
+	// headroom-free sleep flaked under CPU-contended CI when goroutine wakeup
+	// was delayed, unlike the 5x-headroom elapsed check above. A blocking
+	// receive (bounded by an overall deadline) reacts as soon as each packet
+	// actually arrives instead of racing a fixed clock.
 	count := 0
-	for {
+	deadline := time.After(2 * time.Second)
+drain:
+	for count < maxPackets {
 		select {
 		case <-received:
 			count++
-		default:
-			goto done
+		case <-deadline:
+			break drain
 		}
 	}
-done:
+
 	// Loopback is reliable; we expect all maxPackets to arrive.
 	if count < maxPackets {
 		t.Errorf("received %d packets, want %d", count, maxPackets)
