@@ -2,6 +2,8 @@ module github.com/flipslidersand/mesh-drop
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/grandcat/zeroconf v1.0.0

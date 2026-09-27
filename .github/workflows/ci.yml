@@ -11,7 +11,7 @@ jobs:
   test:
     uses: flipslidersand-labs/qa-workflows/.github/workflows/go-test.yml@main
     with:
-      go-version: "1.26.0"
+      go-version: "1.26.8"   # #646: go.mod の toolchain と揃える（reusable は go-version-file 非対応）
       runner: ubuntu-latest
       coverage-threshold: 65   # #572: internal/transfer の doSend/doReceiveFile 等 QUIC ストリーム
                                 # 内部処理は defaultSession（パッケージスコープの共有グローバル）に
@@ -55,6 +55,15 @@ jobs:
           go-version-file: go.mod
       - name: Run integration tests
         run: go test -race -tags integration -timeout 180s ./internal/transfer/...
+
+  govulncheck:
+    # #646: 到達可能な stdlib/依存の既知脆弱性を検出する（toolchain 更新漏れの再発防止）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
 
   gitleaks:
     permissions:
