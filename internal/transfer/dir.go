@@ -281,10 +281,12 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 	totalSize := totalDirSize(files)
 	warnChunkSkew(files, assignments) // #274
 
+	// #644: 受信側は assignChunks(meta.Files, meta.Chunks) で割り当てを再計算するため、
+	// Chunks には len(assignments) ではなく assignChunks への入力値を送る（空ファイル等で両者は一致しない）。
 	meta := Meta{
 		Name:       filepath.Base(dirPath),
 		Size:       totalSize,
-		Chunks:     len(assignments),
+		Chunks:     nChunks,
 		Files:      files,
 		IsBatch:    true,
 		Compressed: compressed,
@@ -497,20 +499,22 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	}
 
 	totalSize := totalDirSize(meta.Files)
+	// assignChunks は決定論的なので送受信側で同一の割り当てが得られる (#247)。
+	// meta.Chunks は要求チャンク数であり実チャンク数ではない (#644)。
+	assignments := assignChunks(meta.Files, meta.Chunks)
 	fmt.Printf("Receiving dir: %s  %d file(s)  %d bytes  %d chunk(s)\n",
-		meta.Name, len(meta.Files), totalSize, meta.Chunks)
+		meta.Name, len(meta.Files), totalSize, len(assignments))
 	if len(doneSet) > 0 {
 		// #270: report skipped files and chunks with percentage
 		skippedChunks := 0
-		allAssignments := assignChunks(meta.Files, meta.Chunks)
-		for _, a := range allAssignments {
+		for _, a := range assignments {
 			if _, done := doneSet[meta.Files[a.fileIndex].Path]; done {
 				skippedChunks++
 			}
 		}
 		pct := 0.0
-		if meta.Chunks > 0 {
-			pct = float64(skippedChunks) / float64(meta.Chunks) * 100
+		if len(assignments) > 0 {
+			pct = float64(skippedChunks) / float64(len(assignments)) * 100
 		}
 		fmt.Printf("  Resume: %d/%d file(s) already complete, skipping %d chunks (%.0f%%)\n",
 			len(doneSet), len(meta.Files), skippedChunks, pct)
@@ -572,8 +576,6 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	}
 
 	// 送信側がスキップしたチャンク数を除いた期待チャンク数を計算する。
-	// assignChunks は決定論的なので送受信側で同一の割り当てが得られる (#247)。
-	assignments := assignChunks(meta.Files, meta.Chunks)
 	expectedChunks := 0
 	for _, a := range assignments {
 		if _, done := doneSet[meta.Files[a.fileIndex].Path]; !done {
