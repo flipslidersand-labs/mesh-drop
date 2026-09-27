@@ -153,14 +153,67 @@ func TestRoundTrip_SingleFile(t *testing.T) {
 	}
 }
 
+// TestRoundTrip_SingleFile_MoreChunksThanBytes は 5 bytes / n=4 のように
+// ceil(size/n) 分割で末尾チャンクが負サイズになるケースの回帰テスト (#644)。
+func TestRoundTrip_SingleFile_MoreChunksThanBytes(t *testing.T) {
+	rtSkipShort(t)
+	for _, tc := range []struct {
+		size    int
+		nChunks int
+	}{{5, 4}, {1, 4}, {10, 7}} {
+		content := make([]byte, tc.size)
+		if _, err := rand.Read(content); err != nil {
+			t.Fatal(err)
+		}
+		srcPath := filepath.Join(t.TempDir(), "small.bin")
+		if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		outDir := t.TempDir()
+		bundle, addr, cancel, recv := rtStartListener(t, outDir)
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := Send(ctx, addr, srcPath, tc.nChunks, bundle.Fingerprint, nil, false, 0, false); err != nil {
+			t.Fatalf("size=%d n=%d: Send: %v", tc.size, tc.nChunks, err)
+		}
+		paths := rtWaitRecv(t, recv, 1)
+		got, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("size=%d n=%d: content mismatch", tc.size, tc.nChunks)
+		}
+		sndCancel()
+		cancel()
+	}
+}
+
 // TestRoundTrip_Dir exercises SendDir / doSendDir / sendDirChunk / acceptDirChunk / doReceiveDir.
 func TestRoundTrip_Dir(t *testing.T) {
 	rtSkipShort(t)
-	srcDir := t.TempDir()
-	files := map[string][]byte{
+	rtSendDirAndCheck(t, map[string][]byte{
 		"a.txt":        []byte("hello from a"),
 		"nested/b.txt": []byte("hello from nested b"),
-	}
+	}, 4)
+}
+
+// TestRoundTrip_Dir_WithEmptyFile は空ファイルを含むディレクトリ送信の回帰テスト (#644)。
+// 送信側 len(assignments) と受信側 assignChunks(meta.Files, meta.Chunks) の件数が
+// 食い違い、1チャンクが未受信のままハッシュ不一致になっていた。
+func TestRoundTrip_Dir_WithEmptyFile(t *testing.T) {
+	rtSkipShort(t)
+	rtSendDirAndCheck(t, map[string][]byte{
+		".gitkeep":        {},
+		"data.bin":        bytes.Repeat([]byte("x"), 100),
+		"pkg/__init__.py": {},
+	}, 4)
+}
+
+func rtSendDirAndCheck(t *testing.T, files map[string][]byte, nChunks int) {
+	t.Helper()
+	srcDir := t.TempDir()
 	for name, data := range files {
 		full := filepath.Join(srcDir, name)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -177,7 +230,7 @@ func TestRoundTrip_Dir(t *testing.T) {
 
 	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer sndCancel()
-	if err := SendDir(ctx, addr, srcDir, 4, bundle.Fingerprint, nil, false, 0, false, nil); err != nil {
+	if err := SendDir(ctx, addr, srcDir, nChunks, bundle.Fingerprint, nil, false, 0, false, nil); err != nil {
 		t.Fatalf("SendDir: %v", err)
 	}
 

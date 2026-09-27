@@ -355,6 +355,13 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 	chunks := nChunks
 	if info.Size() == 0 {
 		chunks = 0
+	} else {
+		// #644: chunkSize=ceil(size/n) だと末尾チャンクが offset>=size（負サイズ）になり得る
+		// （例: 5 bytes / n=4 → chunk3 offset=6）。空チャンクが出ない数に丸める。
+		// ceil(size/ceil(size/k)) で chunkSize は不変なので受信側の再計算とも一致する。
+		cs := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
+		chunks = int((info.Size() + cs - 1) / cs)
+		nChunks = chunks
 	}
 
 	meta := Meta{
