@@ -7,9 +7,11 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -346,5 +348,103 @@ func TestSession_Init_FreshLoadsOrCreatesIdentity(t *testing.T) {
 	// init() is idempotent.
 	if err := s.init(); err != nil {
 		t.Fatalf("init (repeat): %v", err)
+	}
+}
+
+// TestRoundTrip_ReceiverFailureReported は受信側の失敗（ここでは最終パスへの rename 失敗）が
+// 送信側にエラーとして伝わることの回帰テスト (#644)。従来は受信側が常に code 0 "done" で
+// close していたため送信側は "✓ Sent" を返していた。
+func TestRoundTrip_ReceiverFailureReported(t *testing.T) {
+	rtSkipShort(t)
+	blockRename := func(t *testing.T, path string) {
+		t.Helper()
+		// 最終パスに空でないディレクトリを置き、受信側の os.Rename を失敗させる。
+		if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("file", func(t *testing.T) {
+		srcPath := filepath.Join(t.TempDir(), "hello.bin")
+		if err := os.WriteFile(srcPath, []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outDir := t.TempDir()
+		blockRename(t, filepath.Join(outDir, "hello.bin"))
+		bundle, addr, cancel, _ := rtStartListener(t, outDir)
+		defer cancel()
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sndCancel()
+		err := Send(ctx, addr, srcPath, 2, bundle.Fingerprint, nil, false, 0, false)
+		if err == nil || !strings.Contains(err.Error(), "receiver failed") {
+			t.Fatalf("Send error = %v, want receiver failure", err)
+		}
+	})
+
+	t.Run("dir", func(t *testing.T) {
+		srcDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outDir := t.TempDir()
+		blockRename(t, filepath.Join(outDir, "a.txt"))
+		bundle, addr, cancel, _ := rtStartListener(t, outDir)
+		defer cancel()
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sndCancel()
+		err := SendDir(ctx, addr, srcDir, 2, bundle.Fingerprint, nil, false, 0, false, nil)
+		if err == nil || !strings.Contains(err.Error(), "receiver failed") {
+			t.Fatalf("SendDir error = %v, want receiver failure", err)
+		}
+	})
+}
+
+// TestRoundTrip_PipeContent は pipe 送信で末尾データが欠落しないことの回帰テスト (#644)。
+// 従来は io.Copy 完了直後に CloseWithError が走り、未達のストリームデータが破棄され得た。
+func TestRoundTrip_PipeContent(t *testing.T) {
+	rtSkipShort(t)
+	payload := make([]byte, 4<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	origStdin, origStdout := os.Stdin, os.Stdout
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin, os.Stdout = inR, outW
+	t.Cleanup(func() { os.Stdin, os.Stdout = origStdin, origStdout })
+
+	go func() {
+		_, _ = inW.Write(payload)
+		_ = inW.Close()
+	}()
+	gotCh := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(outR)
+		gotCh <- b
+	}()
+
+	bundle, addr, cancel, _ := rtStartListener(t, t.TempDir())
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+	sendErr := SendPipe(ctx, addr, bundle.Fingerprint)
+	// SendPipe は受信側の close（= stdout 書き込み完了後）を待ってから返る。
+	os.Stdout = origStdout
+	_ = outW.Close()
+	got := <-gotCh
+	if sendErr != nil {
+		t.Fatalf("SendPipe: %v", sendErr)
+	}
+	if !bytes.Contains(got, payload) {
+		t.Fatalf("pipe output truncated/corrupted: got %d bytes, want %d", len(got), len(payload))
 	}
 }

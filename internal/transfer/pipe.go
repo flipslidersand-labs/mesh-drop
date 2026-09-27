@@ -64,7 +64,15 @@ func doSendPipe(ctx context.Context, conn *quic.Conn) error {
 
 	select {
 	case err := <-copyDone:
-		return err
+		if err != nil {
+			return err
+		}
+		// #644: 送信済みデータを捨てないよう、FIN を送って受信側の close を待ってから閉じる。
+		// 即 CloseWithError すると未達のストリームデータが破棄され受信側で切り詰められる。
+		if err := stream.Close(); err != nil {
+			return fmt.Errorf("pipe stream close: %w", err)
+		}
+		return awaitReceiverDone(ctx, conn)
 	case <-ctx.Done():
 		// os.Stdin.Read はブロッキングI/Oでctxを認識しないため、io.Copy自体は
 		// stdinにデータが来るかクローズされるまで戻らない可能性がある。
@@ -115,8 +123,8 @@ func ListenPipeNAT(ctx context.Context, udpConn *net.UDPConn) error {
 // doReceivePipeConn は Meta 解析済みの接続からパイプデータを stdout へ書く。
 // dispatchConn から IsPipe=true のとき呼ばれる。
 // peerKey は制御ストリームで確認したピアの静的公開鍵（チャンクストリームの検証に使う）。
-func doReceivePipeConn(ctx context.Context, conn *quic.Conn, peerKey []byte) error {
-	defer func() { _ = conn.CloseWithError(0, "done") }()
+func doReceivePipeConn(ctx context.Context, conn *quic.Conn, peerKey []byte) (retErr error) {
+	defer func() { closeRecvConn(conn, retErr) }()
 
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
