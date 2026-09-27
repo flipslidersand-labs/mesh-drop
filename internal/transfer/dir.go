@@ -412,7 +412,9 @@ func doSendDir(ctx context.Context, conn *quic.Conn, dirPath string, nChunks int
 		}
 	}
 	// Wait for the receiver to close the connection before we do (same race as doSend).
-	_, _ = conn.AcceptStream(ctx) //nolint:errcheck — expect AppError{0} from receiver close
+	if err := awaitReceiverDone(ctx, conn); err != nil {
+		return err
+	}
 
 	// #269: report elapsed time and throughput
 	elapsed := time.Since(start)
@@ -484,7 +486,7 @@ func sendDirChunk(ctx context.Context, conn *quic.Conn, f *os.File, idx int, a c
 // dirDone は送信側がスキップした完了済みファイルの相対パス一覧 (#245)。
 func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string, peerKey []byte, dirDone []string) (retErr error) {
 	if conn != nil {
-		defer func() { _ = conn.CloseWithError(0, "done") }()
+		defer func() { closeRecvConn(conn, retErr) }()
 	}
 	start := time.Now() // #269
 

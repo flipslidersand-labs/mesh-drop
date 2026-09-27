@@ -156,6 +156,33 @@ func acceptAndDispatch(ctx context.Context, ln *quic.Listener) error {
 // 送信側はこのコードを見てエラーを伝播させる（旧クライアント互換の graceful degradation とは区別）。
 const appErrCodeTOFU quic.ApplicationErrorCode = 2
 
+// closeRecvConn は受信処理の結果を QUIC close コードで送信側へ伝える (#644)。
+// 成功時のみ code 0 "done"、失敗時は code 1 とエラーメッセージを送る。
+func closeRecvConn(conn *quic.Conn, err error) {
+	if err != nil {
+		_ = conn.CloseWithError(1, err.Error())
+		return
+	}
+	_ = conn.CloseWithError(0, "done")
+}
+
+// awaitReceiverDone は受信側が接続を閉じるのを待ち、その close コードを結果として返す (#644)。
+// 受信側はストリームを開かないため AcceptStream は close まで戻らない。code 0 のみ成功とみなす。
+func awaitReceiverDone(ctx context.Context, conn *quic.Conn) error {
+	_, err := conn.AcceptStream(ctx)
+	var appErr *quic.ApplicationError
+	if errors.As(err, &appErr) && appErr.Remote {
+		if appErr.ErrorCode == 0 {
+			return nil
+		}
+		return fmt.Errorf("receiver failed (code %d): %s", appErr.ErrorCode, appErr.ErrorMessage)
+	}
+	if err == nil {
+		return errors.New("receiver opened an unexpected stream")
+	}
+	return fmt.Errorf("waiting for receiver: %w", err)
+}
+
 // dispatchConn は Meta を読み、種別に応じてハンドラへ振り分ける。
 // シングルファイル/ディレクトリモードで制御ストリームで ResumeState を返送してから受信する。
 func dispatchConn(ctx context.Context, conn *quic.Conn) error {
@@ -447,11 +474,13 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 			return e
 		}
 	}
-	// Wait for the receiver to close the connection (code 0) before we do.
-	// The receiver calls conn.CloseWithError(0,"done") after hash verification.
+	// Wait for the receiver to close the connection before we do.
+	// The receiver closes with code 0 only after hash verification and rename succeed (#644).
 	// Without this wait the deferred CloseWithError below fires while receiver
 	// goroutines are still in AcceptStream, causing them to fail with AppError 0x0.
-	_, _ = conn.AcceptStream(ctx) //nolint:errcheck — expect AppError{0} from receiver close
+	if err := awaitReceiverDone(ctx, conn); err != nil {
+		return err
+	}
 
 	fmt.Printf("✓ Sent: %s (%d bytes, %d chunks)\n", filePath, info.Size(), nChunks)
 	return nil
@@ -518,7 +547,7 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // #359: 一時ファイル (<outPath>.meshdrop.tmp) へ書き込み、ハッシュ検証成功後に
 // os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outDir string) (retErr error) {
-	defer func() { _ = conn.CloseWithError(0, "done") }()
+	defer func() { closeRecvConn(conn, retErr) }()
 	// #330: Ensure cp.finish() is called on every exit path. The closure captures
 	// cp by reference so it sees the value assigned at line 448 when cp==nil on entry.
 	// finish() is idempotent: flush() is a no-op when not dirty, and os.Remove on a
