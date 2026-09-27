@@ -3,6 +3,7 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -92,5 +93,40 @@ func rtAssertFile(t *testing.T, path, want string) {
 	}
 	if string(got) != want {
 		t.Errorf("%s was overwritten: got %q, want %q", filepath.Base(path), got, want)
+	}
+}
+
+// checkDirDone が受信ディレクトリ外（シンボリックリンク経由）のファイルをハッシュして
+// 「完了済み」と報告しないことの回帰テスト。ピアが既知ハッシュで外部ファイルの存在を探れた。
+func TestCheckDirDone_IgnoresSymlinks(t *testing.T) {
+	outside := t.TempDir()
+	secret := []byte("secret outside receive dir")
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := hashReader(bytes.NewReader(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(outDir, "dirlink")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(outDir, "filelink.txt")); err != nil {
+		t.Fatal(err)
+	}
+	inside := []byte("regular file")
+	if err := os.WriteFile(filepath.Join(outDir, "ok.txt"), inside, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hIn, _ := hashReader(bytes.NewReader(inside))
+
+	done := checkDirDone(outDir, []FileMeta{
+		{Path: "dirlink/secret.txt", Size: int64(len(secret)), Hash: h},
+		{Path: "filelink.txt", Size: int64(len(secret)), Hash: h},
+		{Path: "ok.txt", Size: int64(len(inside)), Hash: hIn},
+	})
+	if len(done) != 1 || done[0] != "ok.txt" {
+		t.Errorf("checkDirDone = %v, want only [ok.txt] (symlinked files must not be reported)", done)
 	}
 }

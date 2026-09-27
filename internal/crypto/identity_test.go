@@ -2,13 +2,17 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/flynn/noise"
 )
 
 // --- LoadOrCreateIdentity ---
@@ -100,13 +104,12 @@ func TestLoadOrCreateIdentity_LoadsExistingKey(t *testing.T) {
 // and confirms LoadOrCreateIdentity reads it byte-for-byte.
 func TestLoadOrCreateIdentity_LoadsExistingKey_ContentMatch(t *testing.T) {
 	dir := t.TempDir()
-	priv := make([]byte, 32)
-	pub := make([]byte, 32)
-	for i := range priv {
-		priv[i] = byte(i + 1)
-		pub[i] = byte(i + 33)
+	kp, err := noise.DH25519.GenerateKeypair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	raw := append(priv, pub...)
+	priv, pub := kp.Private, kp.Public
+	raw := append(append([]byte{}, priv...), pub...)
 	if err := os.WriteFile(filepath.Join(dir, "id_x25519"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -123,21 +126,55 @@ func TestLoadOrCreateIdentity_LoadsExistingKey_ContentMatch(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateIdentity_TruncatedFile verifies that a corrupted (wrong-size)
-// file causes a new keypair to be generated rather than loading garbage.
-func TestLoadOrCreateIdentity_TruncatedFile(t *testing.T) {
-	dir := t.TempDir()
-	// Write only 32 bytes — length check (== 64) must fail.
-	if err := os.WriteFile(filepath.Join(dir, "id_x25519"), make([]byte, 32), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	key, err := LoadOrCreateIdentity(dir)
+// TestLoadOrCreateIdentity_CorruptFileRejected verifies that a corrupted
+// identity file (wrong size, or public key not derived from the private key)
+// is reported as an error and left untouched, not silently regenerated.
+func TestLoadOrCreateIdentity_CorruptFileRejected(t *testing.T) {
+	good := make([]byte, 64)
+	kp, err := noise.DH25519.GenerateKeypair(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A new key should have been generated; it should not be all-zeros.
-	if bytes.Equal(key.Private, make([]byte, 32)) {
-		t.Error("expected fresh non-zero private key for truncated file")
+	copy(good, kp.Private)
+	copy(good[32:], kp.Public)
+	mismatched := append([]byte{}, good...)
+	mismatched[40] ^= 0xff
+
+	for name, content := range map[string][]byte{
+		"truncated":    make([]byte, 32),
+		"mismatch pub": mismatched,
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "id_x25519")
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadOrCreateIdentity(dir); err == nil {
+			t.Errorf("%s: want error for corrupted identity, got nil", name)
+		}
+		after, _ := os.ReadFile(path)
+		if !bytes.Equal(after, content) {
+			t.Errorf("%s: corrupted identity file must not be overwritten", name)
+		}
+	}
+}
+
+// TestLoadOrCreateIdentity_TooOpenPermissionsRejected verifies that an identity
+// file readable by group/others is refused (like ssh does for private keys).
+func TestLoadOrCreateIdentity_TooOpenPermissionsRejected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions only")
+	}
+	dir := t.TempDir()
+	if _, err := LoadOrCreateIdentity(dir); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "id_x25519")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateIdentity(dir); err == nil {
+		t.Error("want error for world-readable identity file, got nil")
 	}
 }
 

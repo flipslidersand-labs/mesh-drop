@@ -370,6 +370,14 @@ func checkDirDone(outDir string, files []FileMeta) []string {
 		g.Go(func() error {
 			for j := range jobCh {
 				absPath := filepath.Join(outDir, j.fm.Path)
+				// シンボリックリンク（自身・親ディレクトリ）経由で outDir 外のファイルを
+				// ハッシュしない。ピアが既知ハッシュで外部ファイルの存在を探る手段を塞ぐ。
+				if fi, err := os.Lstat(absPath); err != nil || !fi.Mode().IsRegular() {
+					continue // 存在しない・通常ファイルでない → 未完了扱い
+				}
+				if ensureWithinBase(outDir, filepath.Dir(absPath)) != nil {
+					continue
+				}
 				f, err := os.Open(absPath)
 				if err != nil {
 					continue // ファイルが存在しない → 未完了
