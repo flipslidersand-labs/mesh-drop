@@ -681,7 +681,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if _, done := doneSet[fm.Path]; done {
 			continue
 		}
-		if err := os.Rename(handles[i].tmpPath, handles[i].path); err != nil {
+		if err := renameFinal(handles[i].tmpPath, handles[i].path); err != nil {
 			return err
 		}
 	}

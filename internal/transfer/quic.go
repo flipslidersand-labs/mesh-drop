@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -289,6 +290,18 @@ func validateChunkRange(f *os.File, cm ChunkMeta) error {
 			cm.Index, cm.Offset, cm.Size, fileSize)
 	}
 	return nil
+}
+
+// renameFinal は一時ファイルを最終パスへ移動する。受信完了直前の失敗（送信側への
+// 失敗通知・resume 用の部分ファイル保持）をテストで決定論的に起こすため差し替え可能にしている。
+// 既存パスへの受信は refuseExisting で事前に拒否されるため、パスを塞いで失敗させる方法は使えない。
+var renameFinalHook atomic.Pointer[func(oldpath, newpath string) error]
+
+func renameFinal(oldpath, newpath string) error {
+	if h := renameFinalHook.Load(); h != nil {
+		return (*h)(oldpath, newpath)
+	}
+	return os.Rename(oldpath, newpath)
 }
 
 // errRefuseOverwrite は受信先に既存ファイル（またはシンボリックリンク）がある場合のエラー。
@@ -720,7 +733,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		// file that still has an open handle (the deferred f.Close() above
 		// only runs after this function returns, too late for the rename).
 		_ = f.Close()
-		if err := os.Rename(tmpPath, outPath); err != nil {
+		if err := renameFinal(tmpPath, outPath); err != nil {
 			return err
 		}
 		cp.finish()
@@ -809,7 +822,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	// after this function returns, too late for the rename).
 	// #644: checkpoint は rename 成功後に消す（rename 失敗時も resume できるように）。
 	_ = f.Close()
-	if err := os.Rename(tmpPath, outPath); err != nil {
+	if err := renameFinal(tmpPath, outPath); err != nil {
 		return err
 	}
 	cp.finish()
