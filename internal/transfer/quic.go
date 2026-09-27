@@ -555,14 +555,28 @@ func sendMeta(ctx context.Context, conn *quic.Conn, meta Meta) ([]byte, error) {
 // os.Rename でアトミックに最終パスへ移動する。失敗時は defer で一時ファイルを削除する。
 func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *checkpoint, peerKey []byte, outDir string) (retErr error) {
 	defer func() { closeRecvConn(conn, retErr) }()
+	// #644: 中断（ネットワーク断・Ctrl-C・rename 失敗等）時は一時ファイルとチェックポイントを
+	// 残して次回 resume できるようにする。破棄するのは成功時・ハッシュ不一致時・進捗ゼロ時のみ。
+	// 以前は全エラーで両方削除していたため、resume はハードクラッシュ時しか効かなかった。
+	keepPartial := func() bool {
+		return retErr != nil && !errors.Is(retErr, ErrHashMismatch) &&
+			cp != nil && len(cp.doneIndices()) > 0
+	}
 	// #330: Ensure cp.finish() is called on every exit path. The closure captures
 	// cp by reference so it sees the value assigned at line 448 when cp==nil on entry.
 	// finish() is idempotent: flush() is a no-op when not dirty, and os.Remove on a
 	// missing file is silently ignored.
 	defer func() {
-		if cp != nil {
-			cp.finish()
+		if cp == nil {
+			return
 		}
+		if keepPartial() {
+			if err := cp.flush(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: checkpoint flush failed for %s: %v\n", cp.path, err)
+			}
+			return
+		}
+		cp.finish()
 	}()
 
 	if meta.Chunks < 0 {
@@ -607,9 +621,14 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	}
 	defer func() {
 		f.Close()
-		if retErr != nil {
-			os.Remove(tmpPath) //nolint:errcheck
+		if retErr == nil {
+			return
 		}
+		if keepPartial() {
+			fmt.Fprintf(os.Stderr, "Partial transfer kept for resume: %s\n", tmpPath)
+			return
+		}
+		os.Remove(tmpPath) //nolint:errcheck
 	}()
 	info, err := f.Stat()
 	if err != nil {
@@ -634,7 +653,6 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 			cp.finish()
 			return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 		}
-		cp.finish()
 		// #572: close tmpPath before renaming — Windows refuses to rename a
 		// file that still has an open handle (the deferred f.Close() above
 		// only runs after this function returns, too late for the rename).
@@ -642,6 +660,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		if err := os.Rename(tmpPath, outPath); err != nil {
 			return err
 		}
+		cp.finish()
 		fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
 		fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 		return nil
@@ -721,15 +740,16 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		cp.finish()
 		return fmt.Errorf("%w\n  want: %s\n   got: %s", ErrHashMismatch, hashPreview(meta.Hash, 16), hashPreview(got, 16))
 	}
-	cp.finish()
 	// #359: ハッシュ検証成功後にアトミックリネームで最終パスへ移動する。
 	// #572: close tmpPath before renaming — Windows refuses to rename a file
 	// that still has an open handle (the deferred f.Close() above only runs
 	// after this function returns, too late for the rename).
+	// #644: checkpoint は rename 成功後に消す（rename 失敗時も resume できるように）。
 	_ = f.Close()
 	if err := os.Rename(tmpPath, outPath); err != nil {
 		return err
 	}
+	cp.finish()
 	fmt.Printf("✓ Hash OK  (%s...)\n", hashPreview(meta.Hash, 16))
 	fmt.Printf("✓ Saved: %s (%d bytes)\n", outPath, meta.Size)
 	return nil
