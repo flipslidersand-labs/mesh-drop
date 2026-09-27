@@ -448,3 +448,71 @@ func TestRoundTrip_PipeContent(t *testing.T) {
 		t.Fatalf("pipe output truncated/corrupted: got %d bytes, want %d", len(got), len(payload))
 	}
 }
+
+// TestRoundTrip_ResumeAfterReceiverError は受信途中のエラー後も一時ファイルと
+// チェックポイントが残り、再送で resume して完了することの回帰テスト (#644)。
+// 以前は全エラーで両方を削除していたため resume はハードクラッシュ時しか効かなかった。
+// 中断は最終パスへの rename 失敗で決定論的に起こす（全チャンク受信・ハッシュ一致済み）。
+func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
+	rtSkipShort(t)
+	content := make([]byte, 256*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(t.TempDir(), "resume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	outPath := filepath.Join(outDir, "resume.bin")
+	// 最終パスに空でないディレクトリを置き、1回目の os.Rename を失敗させる。
+	if err := os.MkdirAll(filepath.Join(outPath, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	// 1回目: 受信側は rename で失敗する（送信側への失敗通知は #649 の範囲）。
+	_ = Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false)
+
+	// 受信側の後始末（defer）完了を待ってから部分ファイルの残存を確認する。
+	statePath := checkpointPath(outPath)
+	tmpPath := outPath + ".meshdrop.tmp"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, errS := os.Stat(statePath)
+		_, errT := os.Stat(tmpPath)
+		if errS == nil && errT == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("partial state not kept after receiver error: state=%v tmp=%v", errS, errT)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2回目: 障害を取り除いて再送 → 全チャンク skip の resume で完了する。
+	if err := os.RemoveAll(outPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false); err != nil {
+		t.Fatalf("resumed Send: %v", err)
+	}
+	paths := rtWaitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("content mismatch after resume")
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Errorf("checkpoint should be removed after success, stat err=%v", err)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("tmp file should be gone after success, stat err=%v", err)
+	}
+}
