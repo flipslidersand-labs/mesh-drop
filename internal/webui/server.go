@@ -276,7 +276,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/api/downloads/", rl.middleware(http.HandlerFunc(s.handleDownload)))
 	mux.Handle("/sse/progress", rl.middleware(http.HandlerFunc(s.handleSSE)))
 
-	srv := &http.Server{Addr: s.addr, Handler: authMiddleware(s.AuthToken, secureHeaders(mux))}
+	srv := &http.Server{Addr: s.addr, Handler: localOriginGuard(authMiddleware(s.AuthToken, secureHeaders(mux)))}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -800,6 +800,46 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="meshdrop"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackHost は Host ヘッダ（ポート付き可）がループバックを指すかを返す。
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// localOriginGuard は Web UI をローカルのブラウザ以外から操作させないための防御。
+// 127.0.0.1 バインドだけでは DNS rebinding（攻撃者ドメインを 127.0.0.1 に向け直す）と
+// クロスサイトの multipart POST（CORS プリフライト不要）を防げない。
+//   - Host がループバック以外なら拒否（rebinding 時の Host は攻撃者ドメインになる）
+//   - 状態変更リクエストは Origin があれば同一オリジンのみ、Sec-Fetch-Site: cross-site は拒否
+//     （Origin 無しは curl 等の非ブラウザクライアントとして許可）
+func localOriginGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackHost(r.Host) {
+			http.Error(w, "Forbidden: invalid Host", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+				http.Error(w, "Forbidden: cross-origin request", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				http.Error(w, "Forbidden: cross-site request", http.StatusForbidden)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
