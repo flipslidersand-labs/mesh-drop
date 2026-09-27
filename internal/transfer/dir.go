@@ -772,14 +772,8 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if err := validateDirChunkHandle(handles, cm); err != nil {
 		return err
 	}
-	if cm.Offset < 0 || cm.Size < 0 {
-		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
-	}
-	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
-		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
-			return fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
-				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
-		}
+	if err := validateChunkRange(handles[cm.FileIndex].f, cm); err != nil {
+		return err
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
@@ -789,14 +783,7 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 			return fmt.Errorf("chunk %d: %w", cm.Index, decErr)
 		}
 		defer dec.Close()
-		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
-		if cerr != nil {
-			return cerr
-		}
-		if n != cm.Size {
-			return fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
-		}
-		return nil
+		return copyDecompressedN(io.MultiWriter(ow, bar), dec, cm.Size, cm.Index)
 	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return err

@@ -273,6 +273,24 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	return meta, cp, peerKey, nil, nil
 }
 
+// validateChunkRange はピア指定のチャンク範囲 [Offset, Offset+Size) が
+// 受信ファイル（Truncate 済み）の範囲内かを検証する (#184)。
+// Offset+Size は int64 オーバーフローし得るため減算で比較し、Stat 失敗時は拒否する。
+func validateChunkRange(f *os.File, cm ChunkMeta) error {
+	if cm.Offset < 0 || cm.Size < 0 {
+		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("chunk %d: stat: %w", cm.Index, err)
+	}
+	if fileSize := info.Size(); cm.Offset > fileSize || cm.Size > fileSize-cm.Offset {
+		return fmt.Errorf("chunk %d: range offset=%d size=%d exceeds file size %d",
+			cm.Index, cm.Offset, cm.Size, fileSize)
+	}
+	return nil
+}
+
 // errRefuseOverwrite は受信先に既存ファイル（またはシンボリックリンク）がある場合のエラー。
 var errRefuseOverwrite = errors.New("refusing to overwrite existing file")
 
@@ -876,17 +894,8 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
 	}
-	// #184: Offset と Size が非負であることを確認する。
-	if cm.Offset < 0 || cm.Size < 0 {
-		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
-	}
-	// #184: チャンク範囲がファイルサイズを超えないことを確認する。
-	// ファイルは Truncate 済みなので Stat の結果は信頼できる。
-	if finfo, serr := f.Stat(); serr == nil {
-		if fileSize := finfo.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
-			return ChunkMeta{}, fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
-				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
-		}
+	if err := validateChunkRange(f, cm); err != nil {
+		return ChunkMeta{}, err
 	}
 
 	ow := &offsetWriter{f: f, off: cm.Offset}
@@ -896,14 +905,7 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 			return ChunkMeta{}, fmt.Errorf("chunk %d: %w", cm.Index, decErr)
 		}
 		defer dec.Close()
-		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
-		if cerr != nil {
-			return cm, cerr
-		}
-		if n != cm.Size {
-			return cm, fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
-		}
-		return cm, nil
+		return cm, copyDecompressedN(io.MultiWriter(ow, bar), dec, cm.Size, cm.Index)
 	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return cm, err

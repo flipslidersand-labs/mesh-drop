@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,11 +109,43 @@ func newZstdEncoder(w io.Writer, compLevel int) (*zstd.Encoder, error) {
 	return enc, nil
 }
 
+// zstd デコーダーの資源上限。ピアが送るフレームヘッダの window サイズで
+// 巨大なメモリを確保させられないよう制限する（エンコーダーの最大 window は
+// SpeedBestCompression の 8 MiB なので余裕を持たせて 16 MiB）。
+const (
+	zstdMaxWindow = 16 << 20
+	zstdMaxMemory = 64 << 20
+)
+
 // newZstdDecoder は r から読み込む zstd デコーダーを返す。
+// チャンクごとに並列ストリームがあるため、デコーダー内部の並行度は 1 に抑える。
 func newZstdDecoder(r io.Reader) (*zstd.Decoder, error) {
-	dec, err := zstd.NewReader(r)
+	dec, err := zstd.NewReader(r,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxWindow(zstdMaxWindow),
+		zstd.WithDecoderMaxMemory(zstdMaxMemory),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("zstd decoder: %w", err)
 	}
 	return dec, nil
+}
+
+// copyDecompressedN は dec から厳密に size バイトだけ dst へ書き込む。
+// io.Copy で無制限に展開すると、展開後サイズの検査前にチャンク範囲外
+// （隣接チャンク・ファイル末尾以降）へ書き込まれ得る（decompression bomb）。
+// size バイト未満で終わる・size バイトを超えて続く場合はエラーを返す。
+func copyDecompressedN(dst io.Writer, dec io.Reader, size int64, index int) error {
+	n, err := io.CopyN(dst, dec, size)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", index, n, size)
+		}
+		return err
+	}
+	var extra [1]byte
+	if m, _ := io.ReadFull(dec, extra[:]); m > 0 {
+		return fmt.Errorf("chunk %d: decompressed data exceeds expected %d bytes", index, size)
+	}
+	return nil
 }
