@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -259,6 +260,10 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
 	}
 	outPath := filepath.Join(outDir, baseName)
+	// 既存ファイルを無言で上書きしない（.bashrc 等の置換を防ぐ）。
+	if err := refuseExisting(outPath, baseName); err != nil {
+		return Meta{}, nil, nil, nil, err
+	}
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	if err := writeResumeState(ns, rs); err != nil {
@@ -266,6 +271,38 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	} // 旧クライアントへの graceful degradation
 
 	return meta, cp, peerKey, nil, nil
+}
+
+// errRefuseOverwrite は受信先に既存ファイル（またはシンボリックリンク）がある場合のエラー。
+var errRefuseOverwrite = errors.New("refusing to overwrite existing file")
+
+// refuseExisting は path に何か（通常ファイル・ディレクトリ・シンボリックリンク）が
+// 既に存在する場合にエラーを返す。Lstat を使うためリンク先ではなくリンク自体を検査する。
+func refuseExisting(path, display string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("%w: %s (move it away or receive into another directory)", errRefuseOverwrite, display)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", display, err)
+	}
+	return nil
+}
+
+// ensureWithinBase は dir をシンボリックリンク解決後も base 配下に留まるか検証する。
+// 既存のシンボリックリンクディレクトリを経由して outDir 外へ書き込むのを防ぐ。
+func ensureWithinBase(base, dir string) error {
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return err
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(realBase, realDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes receive directory via symlink: %s", dir)
+	}
+	return nil
 }
 
 // checkDirDone は outDir 内の既存ファイルを FileMeta リストと照合し、

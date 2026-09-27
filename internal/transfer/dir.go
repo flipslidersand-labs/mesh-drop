@@ -557,11 +557,18 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
 			return err
 		}
+		if err := ensureWithinBase(absBase, filepath.Dir(absOut)); err != nil {
+			return err
+		}
 		if _, done := doneSet[fm.Path]; done {
 			// 完了済み: ファイルハンドルは不要。path だけ記録してハッシュ検証に使う。
 			handles[i] = fileHandle{path: absOut}
 			closed[i] = true // defer でクローズ/削除をスキップ
 			continue
+		}
+		// 完了済み（同一ハッシュ）以外の既存ファイルは上書きしない。
+		if err := refuseExisting(absOut, fm.Path); err != nil {
+			return err
 		}
 		// #359: 一時ファイルへ書き込み、ハッシュ検証成功後にアトミックリネームする。
 		tmpOut := absOut + ".meshdrop.tmp"

@@ -164,3 +164,24 @@ func underlyingPathErr(err error) error {
 		return err
 	}
 }
+
+// TestCmdUI_PreRunE_InitsSession は ui が receive/send と同様に永続 identity と
+// TOFU ストアを初期化することを確認する。未初期化だと内蔵 receiver が
+// ephemeral 鍵・ピア検証なしで任意の LAN ホストから受信してしまう。
+func TestCmdUI_PreRunE_InitsSession(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	globalCfg = nil
+	origInit := initSessionFn
+	t.Cleanup(func() { initSessionFn = origInit })
+	called := false
+	initSessionFn = func() error { called = true; return nil }
+
+	cmd := cmdUI()
+	if err := cmd.PreRunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Error("ui PreRunE must initialize the session (identity + TOFU store)")
+	}
+}
