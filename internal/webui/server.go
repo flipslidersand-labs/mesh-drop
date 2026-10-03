@@ -742,25 +742,33 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
-	s.dlMu.RLock()
-	path, ok := s.downloads[id]
-	s.dlMu.RUnlock()
+	// #634: GET claims the entry atomically (lookup + delete under one lock) so
+	// concurrent GETs cannot both serve and race on file removal; losers get 404.
+	// HEAD only peeks and does not consume the file.
+	var path string
+	var ok bool
+	if r.Method == http.MethodGet {
+		s.dlMu.Lock()
+		path, ok = s.downloads[id]
+		delete(s.downloads, id)
+		s.dlMu.Unlock()
+	} else {
+		s.dlMu.RLock()
+		path, ok = s.downloads[id]
+		s.dlMu.RUnlock()
+	}
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+	if r.Method == http.MethodGet {
+		// #514: serve 完了後にディスクファイルを削除してディスク消費を防ぐ。
+		defer os.Remove(path) //nolint:errcheck
 	}
 	name := filepath.Base(path)
 	// #258: mime.FormatMediaType で RFC 6266 準拠のエスケープを行う
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, path)
-	// #514: serve 完了後にエントリとディスクファイルを削除してメモリ・ディスク消費を防ぐ。
-	// HEAD リクエストではファイルを消費しない。
-	if r.Method == http.MethodGet {
-		s.dlMu.Lock()
-		delete(s.downloads, id)
-		s.dlMu.Unlock()
-		os.Remove(path) //nolint:errcheck
-	}
 }
 
 // authMiddleware enforces optional Bearer-token authentication.
