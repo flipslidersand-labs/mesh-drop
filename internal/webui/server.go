@@ -16,12 +16,22 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flipslidersand/mesh-drop/internal/discovery"
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
 	"golang.org/x/time/rate"
 )
+
+// transferSeq makes IDs unique even when several goroutines read the same
+// UnixNano value.
+var transferSeq atomic.Uint64
+
+// newTransferID returns a URL-safe unique ID: prefix + UnixNano + "-" + seq.
+func newTransferID(prefix string) string {
+	return fmt.Sprintf("%s%d-%d", prefix, time.Now().UnixNano(), transferSeq.Add(1))
+}
 
 //go:embed static
 var staticFiles embed.FS
@@ -428,7 +438,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	id := newTransferID("")
 	total := header.Size
 
 	go func() {
@@ -640,7 +650,7 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	dirName := topDir
 	sendPath := filepath.Join(tmpDir, dirName)
 
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	id := newTransferID("")
 	total := totalSize
 
 	go func() {
@@ -817,7 +827,7 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 
 	addr := fmt.Sprintf("0.0.0.0:%d", discovery.DefaultPort)
 	_ = transfer.ListenContinuous(ctx, addr, bundle, recvDir, func(name, path string, size int64, peer string) {
-		id := fmt.Sprintf("recv-%d", time.Now().UnixNano())
+		id := newTransferID("recv-")
 
 		s.dlMu.Lock()
 		s.downloads[id] = path
