@@ -24,6 +24,7 @@ meshdrop send ./mydir/                  # directory: whole folder transfer
 | **Directory transfer** | Recursive folder send, tree reconstructed on receiver      |
 | **Pipe mode**          | Stdin → stdout streaming between any two hosts             |
 | **NAT traversal**      | STUN + relay signaling + UDP hole punching                 |
+| **Compression**        | Optional zstd (`--compress`, opt-in, levels 1-9)           |
 
 ## Install
 
@@ -72,6 +73,7 @@ meshdrop receive
 meshdrop send ./file.zip
 meshdrop send ./mydir/          # directory
 meshdrop send --chunks 8 ./big.iso   # more parallel streams
+meshdrop send --compress --compress-level 9 ./big.iso   # zstd (1=fastest, 9=best, 0=default level 3)
 ```
 
 When multiple receivers are found, an interactive prompt lets you choose.
