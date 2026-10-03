@@ -9,7 +9,7 @@ import (
 )
 
 func TestRelayMetrics_StatusAndContentType(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/metrics")
@@ -31,7 +31,7 @@ func TestRelayMetrics_StatusAndContentType(t *testing.T) {
 }
 
 func TestRelayMetrics_AllMetricNamesPresent(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/metrics")
@@ -58,7 +58,7 @@ func TestRelayMetrics_AllMetricNamesPresent(t *testing.T) {
 }
 
 func TestRelayMetrics_MethodNotAllowed(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/metrics", "text/plain", nil)
@@ -73,7 +73,7 @@ func TestRelayMetrics_MethodNotAllowed(t *testing.T) {
 }
 
 func TestRelayMetrics_SessionsActiveCount(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -88,7 +88,7 @@ func TestRelayMetrics_SessionsActiveCount(t *testing.T) {
 }
 
 func TestRelayMetrics_TotalIncrementsOnCreate(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
