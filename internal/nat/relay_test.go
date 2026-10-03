@@ -11,7 +11,7 @@ import (
 )
 
 func TestRelayRoundtrip(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -59,7 +59,7 @@ func TestRelayRoundtrip(t *testing.T) {
 }
 
 func TestRelayUnknownCode(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	_, err := Rendezvous(ts.URL, "ZZZZZZ", "1.2.3.4:9999")
@@ -69,7 +69,7 @@ func TestRelayUnknownCode(t *testing.T) {
 }
 
 func TestRelaySessionCleanupAfterRendezvous(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -98,7 +98,7 @@ func TestRelaySessionCleanupOnTimeout(t *testing.T) {
 	origTTL := sessionTTL
 	_ = origTTL // unused lint guard
 
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -138,7 +138,7 @@ func TestRandomCode(t *testing.T) {
 }
 
 func TestRelayJoinRateLimit(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -195,7 +195,7 @@ func TestRandomCodeDistribution(t *testing.T) {
 }
 
 func TestRealIP_NoProxy(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	r := &http.Request{
 		RemoteAddr: "1.2.3.4:9999",
 		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8"}},
@@ -206,7 +206,7 @@ func TestRealIP_NoProxy(t *testing.T) {
 }
 
 func TestRealIP_TrustedProxy_XForwardedFor(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	srv := NewRelayServerFull([]string{"10.0.0.1"}, defaultMaxSessions)
 	r := &http.Request{
 		RemoteAddr: "10.0.0.1:80",
 		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8, 10.0.0.2"}},
@@ -217,7 +217,7 @@ func TestRealIP_TrustedProxy_XForwardedFor(t *testing.T) {
 }
 
 func TestRealIP_TrustedProxy_XRealIP(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	srv := NewRelayServerFull([]string{"10.0.0.1"}, defaultMaxSessions)
 	h := make(http.Header)
 	h.Set("X-Real-IP", "5.6.7.8") // Set でカノニカルキーに変換される
 	r := &http.Request{
@@ -230,7 +230,7 @@ func TestRealIP_TrustedProxy_XRealIP(t *testing.T) {
 }
 
 func TestRealIP_UntrustedProxy_IgnoresHeader(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	srv := NewRelayServerFull([]string{"10.0.0.1"}, defaultMaxSessions)
 	r := &http.Request{
 		RemoteAddr: "9.9.9.9:80", // NOT in trusted list
 		Header:     http.Header{"X-Forwarded-For": []string{"evil.attacker.com"}},
@@ -241,7 +241,7 @@ func TestRealIP_UntrustedProxy_IgnoresHeader(t *testing.T) {
 }
 
 func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"127.0.0.1"})
+	srv := NewRelayServerFull([]string{"127.0.0.1"}, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -293,7 +293,7 @@ func TestRelayJoinRateLimit_WithProxy(t *testing.T) {
 }
 
 func TestHandleHealth_ReturnsOK(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/health")
@@ -318,7 +318,7 @@ func TestHandleHealth_ReturnsOK(t *testing.T) {
 }
 
 func TestHandleHealth_SessionCountIsAccurate(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -344,7 +344,7 @@ func TestHandleHealth_SessionCountIsAccurate(t *testing.T) {
 }
 
 func TestHandleHealth_MethodNotAllowed(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
@@ -363,7 +363,7 @@ func TestHandleHealth_MethodNotAllowed(t *testing.T) {
 // TestRelayPerIPSessionLimit は 1 IP が maxSessionsPerIP を超えたら 429 を返すことを確認する。
 // rateMaxCreate(5) と干渉しないよう maxSessionsPerIP=2 を使用する。
 func TestRelayPerIPSessionLimit(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	srv.maxSessionsPerIP = 2 // rateMaxCreate(5) より小さい値でテスト
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -393,7 +393,7 @@ func TestRelayPerIPSessionLimit(t *testing.T) {
 
 // TestRelayPerIPSessionLimit_Decrement はランデブー完了後にカウンタが減ることを内部状態で確認する。
 func TestRelayPerIPSessionLimit_Decrement(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	srv.maxSessionsPerIP = 2
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -441,7 +441,7 @@ func TestRelayPerIPSessionLimit_Decrement(t *testing.T) {
 // 受信側が joinWaitTimeout でタイムアウトした後に到着した送信側ピアが
 // 410 Gone を受け取り、ランデブー成功と誤判定しないことを確認する。
 func TestHandleJoin_SecondPeerAfterTimeout(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

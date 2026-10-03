@@ -20,7 +20,7 @@ import (
 // session code complete a valid rendezvous and each receives the other's
 // address, regardless of which goroutine wins the "first" slot.
 func TestRelaySlotRace_TwoPeers(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -80,7 +80,7 @@ func TestRelaySlotRace_TwoPeers(t *testing.T) {
 // legitimate rendezvous has completed returns an error status (the session
 // should have been deleted), and does not corrupt the already-exchanged data.
 func TestRelaySlotRace_ThirdPeer(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -127,7 +127,7 @@ func TestRelaySlotRace_ThirdPeer(t *testing.T) {
 // code simultaneously. Exactly two must succeed and one must fail, because a
 // session only supports one pair exchange.
 func TestRelaySlotRace_ThreeConcurrent(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -197,7 +197,7 @@ func TestRelaySlotRace_ThreeConcurrent(t *testing.T) {
 
 // TestHandleCreate_WrongMethod verifies that GET to /session returns 405.
 func TestHandleCreate_WrongMethod(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/session")
@@ -212,7 +212,7 @@ func TestHandleCreate_WrongMethod(t *testing.T) {
 
 // TestHandleJoin_WrongMethod verifies that GET to /session/<code> returns 405.
 func TestHandleJoin_WrongMethod(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/session/ABCDEF123456")
@@ -228,7 +228,7 @@ func TestHandleJoin_WrongMethod(t *testing.T) {
 // TestHandleJoin_NonExistentCode verifies that posting to an unknown code
 // returns 404 — not a panic, not a 200.
 func TestHandleJoin_NonExistentCode(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/session/DOESNOTEXIST", "text/plain", strings.NewReader("1.2.3.4:9999"))
@@ -243,7 +243,7 @@ func TestHandleJoin_NonExistentCode(t *testing.T) {
 
 // TestHandleJoin_EmptyBody verifies that a request with no body returns 400.
 func TestHandleJoin_EmptyBody(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -265,7 +265,7 @@ func TestHandleJoin_EmptyBody(t *testing.T) {
 // TestHandleJoin_InvalidAddrFormat verifies that a malformed address (no port)
 // is rejected with 400.
 func TestHandleJoin_InvalidAddrFormat(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -286,7 +286,7 @@ func TestHandleJoin_InvalidAddrFormat(t *testing.T) {
 
 // TestHandleJoin_AddrTooLong verifies that an oversized body is rejected with 400.
 func TestHandleJoin_AddrTooLong(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -312,7 +312,7 @@ func TestHandleJoin_AddrTooLong(t *testing.T) {
 // internal context.WithTimeout(r.Context(), joinWaitTimeout) inherits the
 // parent deadline and fires almost immediately.
 func TestHandleJoin_Timeout_ViaContext(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 
 	sess := &rdv{chB: make(chan string, 1), done: make(chan struct{})}
 	const code = "TIMEOUT000001"
@@ -337,7 +337,7 @@ func TestHandleJoin_Timeout_ViaContext(t *testing.T) {
 // TestHandleCreate_RateLimit verifies that a single IP cannot create more than
 // rateMaxCreate sessions per rateWindow.
 func TestHandleCreate_RateLimit(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"127.0.0.1"})
+	srv := NewRelayServerFull([]string{"127.0.0.1"}, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -371,7 +371,7 @@ func TestHandleCreate_RateLimit(t *testing.T) {
 // TestHandleCreate_RateLimit_DifferentIPs verifies that two different IPs each
 // have independent create-rate-limit buckets.
 func TestHandleCreate_RateLimit_DifferentIPs(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"127.0.0.1"})
+	srv := NewRelayServerFull([]string{"127.0.0.1"}, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -403,7 +403,7 @@ func TestHandleCreate_RateLimit_DifferentIPs(t *testing.T) {
 // TestRelayCode12Chars is a regression guard for the 6 → 12 character code
 // expansion (issue #161). CreateSession must return exactly 12 characters.
 func TestRelayCode12Chars(t *testing.T) {
-	ts := httptest.NewServer(NewRelayServer().Handler())
+	ts := httptest.NewServer(NewRelayServerFull(nil, defaultMaxSessions).Handler())
 	defer ts.Close()
 
 	// Iterate up to rateMaxCreate times to stay within per-IP create rate limit.
@@ -420,7 +420,7 @@ func TestRelayCode12Chars(t *testing.T) {
 
 // TestIsTrustedProxy_CIDR verifies CIDR-based proxy matching (issue #162).
 func TestIsTrustedProxy_CIDR(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.0/8", "192.168.1.1"})
+	srv := NewRelayServerFull([]string{"10.0.0.0/8", "192.168.1.1"}, defaultMaxSessions)
 
 	cases := []struct {
 		ip   string
@@ -444,7 +444,7 @@ func TestIsTrustedProxy_CIDR(t *testing.T) {
 // TestAllowRate_WindowReset verifies that after rateWindow has elapsed the
 // sliding window resets and a previously exhausted IP is allowed again.
 func TestAllowRate_WindowReset(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 
@@ -470,7 +470,7 @@ func TestAllowRate_WindowReset(t *testing.T) {
 // TestRendezvous_SessionDeletedAfterSuccess checks that after a complete
 // rendezvous the session entry is removed from the map (no session leak).
 func TestRendezvous_SessionDeletedAfterSuccess(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -512,7 +512,7 @@ func TestRendezvous_SessionDeletedAfterSuccess(t *testing.T) {
 // map is full the server rejects new creates, and recovers once the map is
 // cleared.
 func TestHandleCreate_MaxSessionsRejection(t *testing.T) {
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -551,7 +551,7 @@ func TestHandleCreate_MaxSessionsRejection(t *testing.T) {
 // TestRealIP_CIDR_TrustedProxy verifies that an IP matched by CIDR still causes
 // X-Forwarded-For to be honoured (#162).
 func TestRealIP_CIDR_TrustedProxy(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.0/8"})
+	srv := NewRelayServerFull([]string{"10.0.0.0/8"}, defaultMaxSessions)
 	r := &http.Request{
 		RemoteAddr: "10.5.5.5:443",
 		Header:     http.Header{"X-Forwarded-For": []string{"203.0.113.7"}},
@@ -564,7 +564,7 @@ func TestRealIP_CIDR_TrustedProxy(t *testing.T) {
 // TestRealIP_NoXFFHeader verifies that when a trusted proxy sends no
 // X-Forwarded-For and no X-Real-IP, the RemoteAddr host is returned.
 func TestRealIP_NoXFFHeader(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	srv := NewRelayServerFull([]string{"10.0.0.1"}, defaultMaxSessions)
 	r := &http.Request{
 		RemoteAddr: "10.0.0.1:80",
 		Header:     http.Header{},
