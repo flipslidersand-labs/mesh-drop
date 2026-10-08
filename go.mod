@@ -7,7 +7,7 @@ toolchain go1.26.8
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/grandcat/zeroconf v1.0.0
-	github.com/klauspost/compress v1.20.0
+	github.com/klauspost/compress v1.20.1
 	github.com/quic-go/quic-go v0.54.1
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
