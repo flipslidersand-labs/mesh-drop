@@ -704,3 +704,38 @@ func TestRateLimiter_EvictStopsOnContextCancel(t *testing.T) {
 	// to count goroutines without importing runtime/debug, so we rely on the
 	// select{case <-ctx.Done(): return} path being correct by inspection.
 }
+
+// --- localOriginGuard tests (DNS rebinding / cross-site POST) ---
+
+func TestLocalOriginGuard(t *testing.T) {
+	h := localOriginGuard(newOKHandler())
+	for _, tc := range []struct {
+		name, method, host, origin, fetchSite string
+		want                                  int
+	}{
+		{"loopback get", http.MethodGet, "127.0.0.1:8765", "", "", http.StatusOK},
+		{"localhost get", http.MethodGet, "localhost:8765", "", "", http.StatusOK},
+		{"ipv6 loopback", http.MethodGet, "[::1]:8765", "", "", http.StatusOK},
+		{"rebinding host", http.MethodGet, "evil.example:8765", "", "", http.StatusForbidden},
+		{"lan ip host", http.MethodGet, "192.0.2.10:8765", "", "", http.StatusForbidden},
+		{"same-origin post", http.MethodPost, "127.0.0.1:8765", "http://127.0.0.1:8765", "same-origin", http.StatusOK},
+		{"no-origin post (curl)", http.MethodPost, "127.0.0.1:8765", "", "", http.StatusOK},
+		{"cross-origin post", http.MethodPost, "127.0.0.1:8765", "https://evil.example", "cross-site", http.StatusForbidden},
+		{"null origin post", http.MethodPost, "127.0.0.1:8765", "null", "", http.StatusForbidden},
+		{"cross-site no origin", http.MethodPost, "127.0.0.1:8765", "", "cross-site", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(tc.method, "/api/send", nil)
+		req.Host = tc.host
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		if tc.fetchSite != "" {
+			req.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: status %d, want %d", tc.name, rec.Code, tc.want)
+		}
+	}
+}

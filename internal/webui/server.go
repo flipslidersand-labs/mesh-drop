@@ -16,12 +16,22 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flipslidersand/mesh-drop/internal/discovery"
 	"github.com/flipslidersand/mesh-drop/internal/transfer"
 	"golang.org/x/time/rate"
 )
+
+// transferSeq makes IDs unique even when several goroutines read the same
+// UnixNano value.
+var transferSeq atomic.Uint64
+
+// newTransferID returns a URL-safe unique ID: prefix + UnixNano + "-" + seq.
+func newTransferID(prefix string) string {
+	return fmt.Sprintf("%s%d-%d", prefix, time.Now().UnixNano(), transferSeq.Add(1))
+}
 
 //go:embed static
 var staticFiles embed.FS
@@ -266,7 +276,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/api/downloads/", rl.middleware(http.HandlerFunc(s.handleDownload)))
 	mux.Handle("/sse/progress", rl.middleware(http.HandlerFunc(s.handleSSE)))
 
-	srv := &http.Server{Addr: s.addr, Handler: authMiddleware(s.AuthToken, secureHeaders(mux))}
+	srv := &http.Server{Addr: s.addr, Handler: localOriginGuard(authMiddleware(s.AuthToken, secureHeaders(mux)))}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -428,7 +438,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	id := newTransferID("")
 	total := header.Size
 
 	go func() {
@@ -640,7 +650,7 @@ func (s *Server) handleSendDir(w http.ResponseWriter, r *http.Request) {
 	dirName := topDir
 	sendPath := filepath.Join(tmpDir, dirName)
 
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	id := newTransferID("")
 	total := totalSize
 
 	go func() {
@@ -742,25 +752,33 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
-	s.dlMu.RLock()
-	path, ok := s.downloads[id]
-	s.dlMu.RUnlock()
+	// #634: GET claims the entry atomically (lookup + delete under one lock) so
+	// concurrent GETs cannot both serve and race on file removal; losers get 404.
+	// HEAD only peeks and does not consume the file.
+	var path string
+	var ok bool
+	if r.Method == http.MethodGet {
+		s.dlMu.Lock()
+		path, ok = s.downloads[id]
+		delete(s.downloads, id)
+		s.dlMu.Unlock()
+	} else {
+		s.dlMu.RLock()
+		path, ok = s.downloads[id]
+		s.dlMu.RUnlock()
+	}
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+	if r.Method == http.MethodGet {
+		// #514: serve 完了後にディスクファイルを削除してディスク消費を防ぐ。
+		defer os.Remove(path) //nolint:errcheck
 	}
 	name := filepath.Base(path)
 	// #258: mime.FormatMediaType で RFC 6266 準拠のエスケープを行う
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, path)
-	// #514: serve 完了後にエントリとディスクファイルを削除してメモリ・ディスク消費を防ぐ。
-	// HEAD リクエストではファイルを消費しない。
-	if r.Method == http.MethodGet {
-		s.dlMu.Lock()
-		delete(s.downloads, id)
-		s.dlMu.Unlock()
-		os.Remove(path) //nolint:errcheck
-	}
 }
 
 // authMiddleware enforces optional Bearer-token authentication.
@@ -782,6 +800,46 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="meshdrop"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackHost は Host ヘッダ（ポート付き可）がループバックを指すかを返す。
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// localOriginGuard は Web UI をローカルのブラウザ以外から操作させないための防御。
+// 127.0.0.1 バインドだけでは DNS rebinding（攻撃者ドメインを 127.0.0.1 に向け直す）と
+// クロスサイトの multipart POST（CORS プリフライト不要）を防げない。
+//   - Host がループバック以外なら拒否（rebinding 時の Host は攻撃者ドメインになる）
+//   - 状態変更リクエストは Origin があれば同一オリジンのみ、Sec-Fetch-Site: cross-site は拒否
+//     （Origin 無しは curl 等の非ブラウザクライアントとして許可）
+func localOriginGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackHost(r.Host) {
+			http.Error(w, "Forbidden: invalid Host", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+				http.Error(w, "Forbidden: cross-origin request", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				http.Error(w, "Forbidden: cross-site request", http.StatusForbidden)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -809,7 +867,7 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 
 	addr := fmt.Sprintf("0.0.0.0:%d", discovery.DefaultPort)
 	_ = transfer.ListenContinuous(ctx, addr, bundle, recvDir, func(name, path string, size int64, peer string) {
-		id := fmt.Sprintf("recv-%d", time.Now().UnixNano())
+		id := newTransferID("recv-")
 
 		s.dlMu.Lock()
 		s.downloads[id] = path

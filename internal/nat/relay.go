@@ -228,14 +228,24 @@ func (s *RelayServer) realIP(r *http.Request) string {
 	if !s.isTrustedProxy(remote) {
 		return remote
 	}
-	// X-Forwarded-For: client, proxy1, proxy2 — 最左のアドレスがクライアント
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if client := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0]); client != "" {
-			return client
+	// X-Forwarded-For: client, proxy1, proxy2 — 最左はクライアントが自由に書けるため信用しない。
+	// プロキシは右端へ追記するので、右から信頼プロキシを剥がし最初の非信頼アドレスを採用する。
+	// 最左を採用していた頃は XFF を毎回変えるだけで per-IP レート/セッション上限を回避できた。
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := strings.TrimSpace(hops[i])
+		if net.ParseIP(hop) == nil {
+			return remote // 不正な値が混入 → ヘッダーを信用しない
+		}
+		if !s.isTrustedProxy(hop) {
+			return hop
 		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(xri) != nil {
+		return xri
 	}
 	return remote
 }

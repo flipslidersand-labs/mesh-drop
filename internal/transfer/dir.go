@@ -557,11 +557,18 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
 			return err
 		}
+		if err := ensureWithinBase(absBase, filepath.Dir(absOut)); err != nil {
+			return err
+		}
 		if _, done := doneSet[fm.Path]; done {
 			// 完了済み: ファイルハンドルは不要。path だけ記録してハッシュ検証に使う。
 			handles[i] = fileHandle{path: absOut}
 			closed[i] = true // defer でクローズ/削除をスキップ
 			continue
+		}
+		// 完了済み（同一ハッシュ）以外の既存ファイルは上書きしない。
+		if err := refuseExisting(absOut, fm.Path); err != nil {
+			return err
 		}
 		// #359: 一時ファイルへ書き込み、ハッシュ検証成功後にアトミックリネームする。
 		tmpOut := absOut + ".meshdrop.tmp"
@@ -674,7 +681,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		if _, done := doneSet[fm.Path]; done {
 			continue
 		}
-		if err := os.Rename(handles[i].tmpPath, handles[i].path); err != nil {
+		if err := renameFinal(handles[i].tmpPath, handles[i].path); err != nil {
 			return err
 		}
 	}
@@ -765,14 +772,8 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 	if err := validateDirChunkHandle(handles, cm); err != nil {
 		return err
 	}
-	if cm.Offset < 0 || cm.Size < 0 {
-		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
-	}
-	if info, err := handles[cm.FileIndex].f.Stat(); err == nil {
-		if fileSize := info.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
-			return fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
-				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
-		}
+	if err := validateChunkRange(handles[cm.FileIndex].f, cm); err != nil {
+		return err
 	}
 
 	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
@@ -782,14 +783,7 @@ func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, 
 			return fmt.Errorf("chunk %d: %w", cm.Index, decErr)
 		}
 		defer dec.Close()
-		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
-		if cerr != nil {
-			return cerr
-		}
-		if n != cm.Size {
-			return fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
-		}
-		return nil
+		return copyDecompressedN(io.MultiWriter(ow, bar), dec, cm.Size, cm.Index)
 	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return err

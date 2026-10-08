@@ -14,6 +14,42 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [0.9.1] — 2026-10-07
+
+### Security
+- Security hardening of the Web UI and the receive path. Details will be published in security advisory GHSA-9q8q-vqh4-x3p2. Affected versions: `<= 0.9.0`; users are advised to upgrade.
+- `fix(security)` `LoadOrCreateIdentity` zeros private key bytes after use (#594)
+- `fix(security)` `SanitizeName` rejects Windows reserved device names (#579)
+- `fix(deps)` Pin Go toolchain 1.26.8 to clear reachable stdlib vulnerabilities (#647)
+
+### Behavior change
+- Receiving a file whose name already exists in the destination now fails with an error instead of overwriting it.
+
+### Fixed
+- `fix(transfer)` Chunk count mismatch on directories with empty or tiny files (#648)
+- `fix(transfer)` Report receiver failure to the sender; stop pipe-mode truncation (#649)
+- `fix(transfer)` Keep partial file and checkpoint on interrupted receive (#650)
+- `fix(transfer)` Resume checkpoint now honors `outDir` instead of the CWD (#602)
+- `fix(transfer)` Pipe-mode TLS peer verification enabled (#532)
+- `fix(transfer)` `doSendPipe` no longer hangs on stdin read during context cancel (#599)
+- `fix(transfer)` Bounded wait for `ListenContinuous` semaphore (#601)
+- `fix(transfer)` Transfer IDs are unique under concurrency (#658)
+- `fix(webui)` Claim download entry atomically on GET to avoid TOCTOU (#661)
+- `fix(webui)` Remove leftover multipart temp files (#600)
+- `fix(discovery)` Avoid slice-out-of-range panic on short mDNS peer fingerprints (#581)
+- `fix` Validate out-of-range `compress_level` / `--compress-level` (#576)
+
+### Changed
+- `chore(deps)` Dependency updates: `miekg/dns` v1.1.73 (#606), `x/crypto` 0.57.0 (#548), `klauspost/compress` 1.20.0 (#544)
+- Remove the unimplemented idle-timeout config setting (#660)
+
+### Documentation / CI
+- README documents `--compress` / `--compress-level` (#657); install section uses the correct org (#605); architecture tree updated (#656)
+- LICENSE copyright holder updated (#655)
+- CI: gitleaks secret scan (#549), go-version follows `go.mod` (#554, #556, #598, #659), test coverage threshold raised to 65% (#607)
+
+---
+
 ## [0.8.0] — 2026-08-25
 
 ### Added

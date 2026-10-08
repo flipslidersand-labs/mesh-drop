@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -356,12 +357,9 @@ func TestSession_Init_FreshLoadsOrCreatesIdentity(t *testing.T) {
 // close していたため送信側は "✓ Sent" を返していた。
 func TestRoundTrip_ReceiverFailureReported(t *testing.T) {
 	rtSkipShort(t)
-	blockRename := func(t *testing.T, path string) {
+	blockRename := func(t *testing.T, _ string) {
 		t.Helper()
-		// 最終パスに空でないディレクトリを置き、受信側の os.Rename を失敗させる。
-		if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		rtFailFinalRename(t)
 	}
 
 	t.Run("file", func(t *testing.T) {
@@ -465,10 +463,8 @@ func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
 	}
 	outDir := t.TempDir()
 	outPath := filepath.Join(outDir, "resume.bin")
-	// 最終パスに空でないディレクトリを置き、1回目の os.Rename を失敗させる。
-	if err := os.MkdirAll(filepath.Join(outPath, "occupied"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// 1回目の最終 rename を失敗させる。
+	restoreRename := rtFailFinalRename(t)
 
 	bundle, addr, cancel, recv := rtStartListener(t, outDir)
 	defer cancel()
@@ -495,9 +491,7 @@ func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
 	}
 
 	// 2回目: 障害を取り除いて再送 → 全チャンク skip の resume で完了する。
-	if err := os.RemoveAll(outPath); err != nil {
-		t.Fatal(err)
-	}
+	restoreRename()
 	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false); err != nil {
 		t.Fatalf("resumed Send: %v", err)
 	}
@@ -515,4 +509,14 @@ func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Errorf("tmp file should be gone after success, stat err=%v", err)
 	}
+}
+
+// rtFailFinalRename は受信側の最終 rename を失敗させ、元に戻す関数を返す（t.Cleanup でも復元）。
+func rtFailFinalRename(t *testing.T) (restore func()) {
+	t.Helper()
+	fail := func(_, _ string) error { return errors.New("injected rename failure") }
+	renameFinalHook.Store(&fail)
+	restore = func() { renameFinalHook.Store(nil) }
+	t.Cleanup(restore)
+	return restore
 }

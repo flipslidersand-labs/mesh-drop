@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,32 @@ func TestDataPath_Home(t *testing.T) {
 	want := filepath.Join(home, ".meshdrop", "tofu.json")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// #617: idle-timeout was never wired to the QUIC layer, so it must not be
+// advertised in the template, and existing configs that still set it must load.
+func TestInitTemplate_NoIdleTimeout(t *testing.T) {
+	if strings.Contains(InitTemplate, "idle-timeout") {
+		t.Error("InitTemplate must not advertise unimplemented idle-timeout")
+	}
+}
+
+func TestLoad_LegacyIdleTimeoutIgnored(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	dir := filepath.Join(tmp, "meshdrop")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("port: 9090\nidle-timeout: 30\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("legacy idle-timeout key must not break Load: %v", err)
+	}
+	if cfg.Port != 9090 {
+		t.Errorf("port: got %d, want 9090", cfg.Port)
 	}
 }
