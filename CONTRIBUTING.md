@@ -58,6 +58,8 @@ Types: `feat`, `fix`, `test`, `ci`, `docs`, `chore`, `perf`, `refactor`, `securi
 ```
 cmd/meshdrop/        CLI entry point (cobra)
 internal/
+  config/            Config file loading (~/.meshdrop/config.yaml)
+  crypto/            Noise handshake, X25519 identity, HKDF key derivation, TOFU peer pinning
   discovery/         mDNS peer discovery
   nat/               QUIC relay server + client
   transfer/          QUIC file transfer engine (send/receive)

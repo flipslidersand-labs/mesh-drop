@@ -206,13 +206,39 @@ func TestRealIP_NoProxy(t *testing.T) {
 }
 
 func TestRealIP_TrustedProxy_XForwardedFor(t *testing.T) {
-	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	// 2段の信頼プロキシ（10.0.0.2 → 10.0.0.1）を経由したクライアント 5.6.7.8。
+	srv := NewRelayServerWithProxies([]string{"10.0.0.1", "10.0.0.2"})
 	r := &http.Request{
 		RemoteAddr: "10.0.0.1:80",
 		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8, 10.0.0.2"}},
 	}
 	if got := srv.realIP(r); got != "5.6.7.8" {
 		t.Errorf("realIP with trusted proxy XFF = %q, want 5.6.7.8", got)
+	}
+}
+
+// TestRealIP_TrustedProxy_XFFSpoofing は最左の XFF 値（クライアントが自由に書ける）を
+// 採用せず、右から信頼プロキシを剥がした最初の非信頼アドレスを使うことを確認する。
+// 最左を採用すると XFF を毎回変えるだけで per-IP 制限を回避できた。
+func TestRealIP_TrustedProxy_XFFSpoofing(t *testing.T) {
+	srv := NewRelayServerWithProxies([]string{"10.0.0.1"})
+	for _, tc := range []struct {
+		name string
+		xff  []string
+		want string
+	}{
+		{"spoofed leftmost", []string{"1.1.1.1, 5.6.7.8"}, "5.6.7.8"},
+		{"multiple headers", []string{"1.1.1.1", "5.6.7.8"}, "5.6.7.8"},
+		{"garbage hop", []string{"5.6.7.8, not-an-ip"}, "10.0.0.1"},
+		{"only trusted hops", []string{"10.0.0.1"}, "10.0.0.1"},
+	} {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header:     http.Header{"X-Forwarded-For": tc.xff},
+		}
+		if got := srv.realIP(r); got != tc.want {
+			t.Errorf("%s: realIP = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

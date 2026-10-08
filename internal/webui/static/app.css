@@ -1,0 +1,68 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #0f0f11; color: #e2e2e2; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
+.sub { color: #888; font-size: 0.85rem; margin-bottom: 2rem; }
+.card { background: #1a1a1f; border: 1px solid #2a2a35; border-radius: 12px; padding: 1.5rem; width: 100%; max-width: 520px; margin-bottom: 1.25rem; }
+.card h2 { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 1rem; }
+#drop-zone {
+  border: 2px dashed #3a3a50; border-radius: 8px; padding: 2.5rem 1rem;
+  text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+#drop-zone.over { border-color: #7c6cfc; background: rgba(124,108,252,0.06); }
+#drop-zone p { color: #888; font-size: 0.9rem; }
+#drop-zone strong { display: block; font-size: 1rem; color: #e2e2e2; margin-bottom: 0.5rem; }
+#file-input { display: none; }
+.peers { display: flex; flex-direction: column; gap: 0.5rem; min-height: 2rem; }
+.peer-btn {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.9rem;
+  border: 1px solid #2a2a35; border-radius: 8px; background: #13131a; cursor: pointer;
+  color: #e2e2e2; font-size: 0.9rem; transition: border-color 0.15s, background 0.15s;
+}
+.peer-btn:hover { border-color: #7c6cfc; background: rgba(124,108,252,0.08); }
+.peer-btn.selected { border-color: #7c6cfc; background: rgba(124,108,252,0.15); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+.empty { color: #555; font-size: 0.85rem; text-align: center; padding: 0.5rem 0; }
+details { margin-top: 1rem; }
+summary { cursor: pointer; font-size: 0.82rem; color: #777; user-select: none; }
+summary:hover { color: #aaa; }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem; }
+.settings-grid label { font-size: 0.8rem; color: #888; display: flex; flex-direction: column; gap: 0.3rem; }
+.settings-grid input[type=text], .settings-grid input[type=number] {
+  background: #0f0f11; border: 1px solid #2a2a35; border-radius: 6px;
+  color: #e2e2e2; padding: 0.35rem 0.5rem; font-size: 0.85rem;
+}
+.settings-grid input[type=checkbox] { width: 1rem; height: 1rem; accent-color: #7c6cfc; }
+.check-row { flex-direction: row !important; align-items: center; gap: 0.5rem !important; }
+.progress-wrap { margin-top: 0.75rem; }
+progress { width: 100%; height: 6px; border-radius: 3px; appearance: none; }
+progress::-webkit-progress-bar { background: #2a2a35; border-radius: 3px; }
+progress::-webkit-progress-value { background: #7c6cfc; border-radius: 3px; transition: width 0.2s; }
+.progress-label { font-size: 0.78rem; color: #888; margin-top: 0.3rem; text-align: right; }
+#send-btn {
+  width: 100%; padding: 0.8rem; border: none; border-radius: 8px;
+  background: #7c6cfc; color: #fff; font-size: 0.95rem; font-weight: 600;
+  cursor: pointer; transition: opacity 0.15s;
+}
+#send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+#send-btn:not(:disabled):hover { opacity: 0.88; }
+.events { display: flex; flex-direction: column; gap: 0.4rem; }
+.event {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.75rem;
+  border-radius: 6px; font-size: 0.82rem; background: #13131a; border: 1px solid #2a2a35;
+}
+.event.ok { border-color: #166534; background: #052e16; }
+.event.err { border-color: #7f1d1d; background: #2d0a0a; }
+.event.pending { border-color: #1e3a5f; background: #0a1a2d; }
+.event .icon { font-size: 1rem; flex-shrink: 0; }
+.selected-file { margin-top: 0.75rem; font-size: 0.82rem; color: #aaa; text-align: center; }
+.mode-toggle { display: flex; gap: 0; margin-bottom: 0.75rem; border: 1px solid #2a2a35; border-radius: 8px; overflow: hidden; }
+.mode-btn { flex: 1; padding: 0.45rem; border: none; background: #13131a; color: #777; font-size: 0.82rem; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.mode-btn.active { background: rgba(124,108,252,0.2); color: #c4b9fc; }
+/* 旧インライン style 属性（CSP default-src 'self' でブロックされていた）をクラス化 */
+.hidden { display: none !important; }
+.hint { font-weight: 400; color: #555; font-size: 0.75rem; }
+.muted { color: #555; }
+.peer-addr { color: #555; font-size: 0.75rem; margin-left: auto; }
+.level-input { width: 5rem; }
+.full-row { grid-column: 1 / -1; }
+.dl-link { color: #7c6cfc; margin-left: 0.5rem; font-size: 0.8rem; }

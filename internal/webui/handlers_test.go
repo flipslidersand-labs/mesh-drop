@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -315,5 +316,60 @@ func TestRunReceiver_HistoryEntry(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "doc.pdf") {
 		t.Errorf("history response does not contain expected file: %s", rr.Body.String())
+	}
+}
+
+// TestHandleDownload_ConcurrentGET verifies that concurrent GETs for the same id
+// are serialized by claiming the entry atomically (#634): exactly one request
+// receives the full body, the others get a clean 404 (never a partial/5xx result).
+func TestHandleDownload_ConcurrentGET(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.bin")
+	body := bytes.Repeat([]byte("x"), 1<<20)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.dlMu.Lock()
+	s.downloads["race-id"] = path
+	s.dlMu.Unlock()
+
+	const n = 16
+	codes := make([]int, n)
+	lens := make([]int, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodGet, "/api/downloads/race-id", nil)
+			rr := httptest.NewRecorder()
+			s.handleDownload(rr, req)
+			codes[i], lens[i] = rr.Code, rr.Body.Len()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	ok := 0
+	for i := range codes {
+		switch codes[i] {
+		case http.StatusOK:
+			ok++
+			if lens[i] != len(body) {
+				t.Errorf("req %d: 200 with truncated body %d/%d", i, lens[i], len(body))
+			}
+		case http.StatusNotFound:
+		default:
+			t.Errorf("req %d: unexpected status %d", i, codes[i])
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("expected exactly one 200, got %d (codes=%v)", ok, codes)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file should be removed after download, stat err=%v", err)
 	}
 }

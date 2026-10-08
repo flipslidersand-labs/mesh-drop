@@ -12,11 +12,10 @@ import (
 // Zero values mean "not set" — callers must use them only when the
 // corresponding CLI flag was not explicitly passed.
 type Config struct {
-	Relay       string `yaml:"relay"`
-	Port        int    `yaml:"port"`
-	RateLimit   string `yaml:"rate-limit"`
-	AuthToken   string `yaml:"auth-token"`
-	IdleTimeout int    `yaml:"idle-timeout"` // seconds
+	Relay     string `yaml:"relay"`
+	Port      int    `yaml:"port"`
+	RateLimit string `yaml:"rate-limit"`
+	AuthToken string `yaml:"auth-token"`
 }
 
 // ConfigPath returns the resolved path to the config file.
@@ -87,7 +86,4 @@ const InitTemplate = `# MeshDrop configuration file
 
 # auth-token: bearer token for the Web UI REST API
 # auth-token: ""
-
-# idle-timeout: connection idle timeout in seconds (0 = disabled)
-# idle-timeout: 0
 `

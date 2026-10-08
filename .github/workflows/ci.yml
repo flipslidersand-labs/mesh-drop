@@ -23,6 +23,24 @@ jobs:
                                 # acceptChunk）はNAT実ソケット経由・CWD依存の旧互換経路で、
                                 # 個別にテスト追加する価値は低いため未対応。
 
+  go-version-sync:
+    name: go.mod / ci.yml go-version sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # reusable workflow (go-test.yml) は go-version-file 非対応のため、
+      # test ジョブの go-version 文字列と go.mod の toolchain/go の乖離を検出する (#613)
+      - name: Verify test job go-version matches go.mod
+        run: |
+          want=$(awk '$1=="toolchain"{sub(/^go/,"",$2);print $2;f=1} $1=="go"&&!g{g=$2} END{if(!f)print g}' go.mod)
+          have=$(awk '/^  test:/{t=1} t&&/go-version:/{gsub(/"/,"",$2);print $2;exit}' .github/workflows/ci.yml)
+          echo "go.mod: ${want} / ci.yml test job: ${have}"
+          if [ -z "$want" ] || [ "$want" != "$have" ]; then
+            echo "::error::ci.yml test job go-version (${have}) does not match go.mod (${want})"
+            exit 1
+          fi
+
   windows-ci:
     name: Windows build & test
     runs-on: windows-latest

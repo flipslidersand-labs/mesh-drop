@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -259,6 +261,10 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, fmt.Errorf("invalid file name in metadata: %w", err)
 	}
 	outPath := filepath.Join(outDir, baseName)
+	// 既存ファイルを無言で上書きしない（.bashrc 等の置換を防ぐ）。
+	if err := refuseExisting(outPath, baseName); err != nil {
+		return Meta{}, nil, nil, nil, err
+	}
 	cp := loadOrCreate(outPath, meta)
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	if err := writeResumeState(ns, rs); err != nil {
@@ -266,6 +272,68 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 	} // 旧クライアントへの graceful degradation
 
 	return meta, cp, peerKey, nil, nil
+}
+
+// validateChunkRange はピア指定のチャンク範囲 [Offset, Offset+Size) が
+// 受信ファイル（Truncate 済み）の範囲内かを検証する (#184)。
+// Offset+Size は int64 オーバーフローし得るため減算で比較し、Stat 失敗時は拒否する。
+func validateChunkRange(f *os.File, cm ChunkMeta) error {
+	if cm.Offset < 0 || cm.Size < 0 {
+		return fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("chunk %d: stat: %w", cm.Index, err)
+	}
+	if fileSize := info.Size(); cm.Offset > fileSize || cm.Size > fileSize-cm.Offset {
+		return fmt.Errorf("chunk %d: range offset=%d size=%d exceeds file size %d",
+			cm.Index, cm.Offset, cm.Size, fileSize)
+	}
+	return nil
+}
+
+// renameFinal は一時ファイルを最終パスへ移動する。受信完了直前の失敗（送信側への
+// 失敗通知・resume 用の部分ファイル保持）をテストで決定論的に起こすため差し替え可能にしている。
+// 既存パスへの受信は refuseExisting で事前に拒否されるため、パスを塞いで失敗させる方法は使えない。
+var renameFinalHook atomic.Pointer[func(oldpath, newpath string) error]
+
+func renameFinal(oldpath, newpath string) error {
+	if h := renameFinalHook.Load(); h != nil {
+		return (*h)(oldpath, newpath)
+	}
+	return os.Rename(oldpath, newpath)
+}
+
+// errRefuseOverwrite は受信先に既存ファイル（またはシンボリックリンク）がある場合のエラー。
+var errRefuseOverwrite = errors.New("refusing to overwrite existing file")
+
+// refuseExisting は path に何か（通常ファイル・ディレクトリ・シンボリックリンク）が
+// 既に存在する場合にエラーを返す。Lstat を使うためリンク先ではなくリンク自体を検査する。
+func refuseExisting(path, display string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("%w: %s (move it away or receive into another directory)", errRefuseOverwrite, display)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", display, err)
+	}
+	return nil
+}
+
+// ensureWithinBase は dir をシンボリックリンク解決後も base 配下に留まるか検証する。
+// 既存のシンボリックリンクディレクトリを経由して outDir 外へ書き込むのを防ぐ。
+func ensureWithinBase(base, dir string) error {
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return err
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(realBase, realDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes receive directory via symlink: %s", dir)
+	}
+	return nil
 }
 
 // checkDirDone は outDir 内の既存ファイルを FileMeta リストと照合し、
@@ -315,6 +383,14 @@ func checkDirDone(outDir string, files []FileMeta) []string {
 		g.Go(func() error {
 			for j := range jobCh {
 				absPath := filepath.Join(outDir, j.fm.Path)
+				// シンボリックリンク（自身・親ディレクトリ）経由で outDir 外のファイルを
+				// ハッシュしない。ピアが既知ハッシュで外部ファイルの存在を探る手段を塞ぐ。
+				if fi, err := os.Lstat(absPath); err != nil || !fi.Mode().IsRegular() {
+					continue // 存在しない・通常ファイルでない → 未完了扱い
+				}
+				if ensureWithinBase(outDir, filepath.Dir(absPath)) != nil {
+					continue
+				}
 				f, err := os.Open(absPath)
 				if err != nil {
 					continue // ファイルが存在しない → 未完了
@@ -657,7 +733,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 		// file that still has an open handle (the deferred f.Close() above
 		// only runs after this function returns, too late for the rename).
 		_ = f.Close()
-		if err := os.Rename(tmpPath, outPath); err != nil {
+		if err := renameFinal(tmpPath, outPath); err != nil {
 			return err
 		}
 		cp.finish()
@@ -746,7 +822,7 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	// after this function returns, too late for the rename).
 	// #644: checkpoint は rename 成功後に消す（rename 失敗時も resume できるように）。
 	_ = f.Close()
-	if err := os.Rename(tmpPath, outPath); err != nil {
+	if err := renameFinal(tmpPath, outPath); err != nil {
 		return err
 	}
 	cp.finish()
@@ -839,17 +915,8 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
 	}
-	// #184: Offset と Size が非負であることを確認する。
-	if cm.Offset < 0 || cm.Size < 0 {
-		return ChunkMeta{}, fmt.Errorf("chunk %d: invalid range offset=%d size=%d", cm.Index, cm.Offset, cm.Size)
-	}
-	// #184: チャンク範囲がファイルサイズを超えないことを確認する。
-	// ファイルは Truncate 済みなので Stat の結果は信頼できる。
-	if finfo, serr := f.Stat(); serr == nil {
-		if fileSize := finfo.Size(); fileSize >= 0 && cm.Offset+cm.Size > fileSize {
-			return ChunkMeta{}, fmt.Errorf("chunk %d: range [%d, %d) exceeds file size %d",
-				cm.Index, cm.Offset, cm.Offset+cm.Size, fileSize)
-		}
+	if err := validateChunkRange(f, cm); err != nil {
+		return ChunkMeta{}, err
 	}
 
 	ow := &offsetWriter{f: f, off: cm.Offset}
@@ -859,14 +926,7 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 			return ChunkMeta{}, fmt.Errorf("chunk %d: %w", cm.Index, decErr)
 		}
 		defer dec.Close()
-		n, cerr := io.Copy(io.MultiWriter(ow, bar), dec)
-		if cerr != nil {
-			return cm, cerr
-		}
-		if n != cm.Size {
-			return cm, fmt.Errorf("chunk %d: decompressed %d bytes, expected %d", cm.Index, n, cm.Size)
-		}
-		return cm, nil
+		return cm, copyDecompressedN(io.MultiWriter(ow, bar), dec, cm.Size, cm.Index)
 	}
 	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
 	return cm, err

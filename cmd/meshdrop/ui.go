@@ -45,7 +45,10 @@ func cmdUI() *cobra.Command {
 			} else if globalCfg.AuthToken != "" {
 				uiAuthToken = globalCfg.AuthToken
 			}
-			return nil
+			// Web UI は内蔵 receiver を 0.0.0.0 で待ち受け mDNS 広告するため、
+			// receive/send と同じく永続 identity と TOFU ストアを必ず初期化する。
+			// 未初期化だと ephemeral 鍵・ピア検証なしで任意の LAN ホストから受信してしまう。
+			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
