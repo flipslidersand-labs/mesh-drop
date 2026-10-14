@@ -20,7 +20,7 @@ import (
 
 func TestRelayIPSpoofing_XFFIgnoredFromUntrustedOrigin(t *testing.T) {
 	// Server with no trusted proxies — every XFF header must be ignored.
-	srv := NewRelayServer()
+	srv := NewRelayServerFull(nil, defaultMaxSessions)
 	defer srv.Stop()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -49,7 +49,7 @@ func TestRelayIPSpoofing_XFFIgnoredFromUntrustedOrigin(t *testing.T) {
 
 func TestRelayIPSpoofing_XFFHonoredFromTrustedProxy(t *testing.T) {
 	// httptest client always connects from 127.0.0.1, so list it as trusted.
-	srv := NewRelayServerWithProxies([]string{"127.0.0.1"})
+	srv := NewRelayServerFull([]string{"127.0.0.1"}, defaultMaxSessions)
 	defer srv.Stop()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

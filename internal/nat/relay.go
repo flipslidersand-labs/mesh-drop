@@ -93,21 +93,9 @@ func (r *rdv) closeDone() {
 	r.doneOnce.Do(func() { close(r.done) })
 }
 
-// NewRelayServer は信頼プロキシなしのリレーサーバーを生成する。
-// リバースプロキシ背後で動かす場合は NewRelayServerWithProxies を使うこと。
-func NewRelayServer() *RelayServer {
-	return NewRelayServerWithProxies(nil)
-}
-
-// NewRelayServerWithProxies は信頼プロキシ IP/CIDR リスト付きでリレーサーバーを生成する。
-// trustedProxies に含まれる IP またはそのサブネットからのリクエストは
-// X-Forwarded-For / X-Real-IP をクライアント IP として採用する。
-// #162: CIDR 表記をサポートする。
-func NewRelayServerWithProxies(trustedProxies []string) *RelayServer {
-	return NewRelayServerFull(trustedProxies, defaultMaxSessions)
-}
-
 // NewRelayServerFull は信頼プロキシとセッション数上限を指定してリレーサーバーを生成する。
+// trustedProxies に含まれる IP またはそのサブネット(CIDR 可, #162)からのリクエストは
+// X-Forwarded-For / X-Real-IP をクライアント IP として採用する。
 // maxSess が 0 以下の場合は defaultMaxSessions を使用する。
 func NewRelayServerFull(trustedProxies []string, maxSess int) *RelayServer {
 	if maxSess <= 0 {
