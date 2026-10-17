@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -252,16 +253,9 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 		return fmt.Errorf("bind UDP :%d: %w", port, err)
 	}
 
-	fmt.Printf("Querying STUN (%s)...\n", nat.DefaultSTUN)
-	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
+	externalAddr, err := natExternalAddr(udpConn, os.Stdout)
 	if err != nil {
-		slog.Debug("STUN via socket failed, trying fallback", "err", err)
-		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
-		if e2 != nil {
-			_ = udpConn.Close()
-			return fmt.Errorf("STUN: %w", e2)
-		}
-		externalAddr = fmt.Sprintf("%s:%d", ip, port)
+		return err
 	}
 
 	fmt.Printf("\n  Pairing code : %s\n", code)
@@ -269,20 +263,10 @@ func receiveNAT(ctx context.Context, port int, relayURL string, pipe bool) error
 	fmt.Printf("Run on sender:\n  meshdrop send --relay %s --code %s <file>\n\n", relayURL, code)
 
 	fmt.Println("Waiting for sender (up to 60s)...")
-	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
-	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("rendezvous: %w", err)
+	if _, err := natRendezvousAndPunch(ctx, udpConn, relayURL, code, externalAddr,
+		func(peerAddr string) { fmt.Printf("Sender found: %s\n", peerAddr) }); err != nil {
+		return err
 	}
-	fmt.Printf("Sender found: %s\n", peerAddr)
-
-	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
-	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("parse peer addr: %w", err)
-	}
-
-	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	fmt.Printf("QUIC listening on %s...\n", udpConn.LocalAddr())
 	if pipe {
@@ -629,43 +613,65 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 	return nil
 }
 
-func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
-	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
-	if err != nil {
-		return fmt.Errorf("bind UDP: %w", err)
-	}
-	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
-
-	fmt.Printf("Querying STUN (%s)...\n", nat.DefaultSTUN)
+// natExternalAddr は udpConn 上で STUN により外部アドレスを取得する。
+// ソケット経由が失敗したら nat.DiscoverExternalIP + ローカルポートで代替する。
+// 失敗時は udpConn を閉じて返す。進捗表示は out に出す。
+func natExternalAddr(udpConn *net.UDPConn, out io.Writer) (string, error) {
+	fmt.Fprintf(out, "Querying STUN (%s)...\n", nat.DefaultSTUN)
 	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
 	if err != nil {
 		slog.Debug("STUN via socket failed, trying fallback", "err", err)
 		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
 		if e2 != nil {
 			_ = udpConn.Close()
-			return fmt.Errorf("STUN: %w", e2)
+			return "", fmt.Errorf("STUN: %w", e2)
 		}
-		externalAddr = fmt.Sprintf("%s:%d", ip, localPort)
+		externalAddr = fmt.Sprintf("%s:%d", ip, udpConn.LocalAddr().(*net.UDPAddr).Port)
+	}
+	return externalAddr, nil
+}
+
+// natRendezvousAndPunch はリレーでピアの外部アドレスを交換し、ホールパンチする。
+// onFound はピアアドレス確定直後(ホールパンチ前)に呼ばれる。nil 可。
+// 失敗時は udpConn を閉じて返す。
+func natRendezvousAndPunch(ctx context.Context, udpConn *net.UDPConn, relayURL, code, externalAddr string, onFound func(peerAddr string)) (*net.UDPAddr, error) {
+	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
+	if err != nil {
+		_ = udpConn.Close()
+		return nil, fmt.Errorf("rendezvous: %w", err)
+	}
+	if onFound != nil {
+		onFound(peerAddr)
+	}
+	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
+	if err != nil {
+		_ = udpConn.Close()
+		return nil, fmt.Errorf("parse peer addr: %w", err)
+	}
+	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
+	return peerUDP, nil
+}
+
+func sendNAT(ctx context.Context, relayURL, code, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		return fmt.Errorf("bind UDP: %w", err)
+	}
+
+	externalAddr, err := natExternalAddr(udpConn, os.Stdout)
+	if err != nil {
+		return err
 	}
 	fmt.Printf("External: %s\n", externalAddr)
 
 	fmt.Printf("Connecting to relay (code=%s)...\n", code)
-	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
+	peerUDP, err := natRendezvousAndPunch(ctx, udpConn, relayURL, code, externalAddr,
+		func(peerAddr string) { fmt.Printf("Receiver found: %s\n", peerAddr) })
 	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("rendezvous: %w", err)
-	}
-	fmt.Printf("Receiver found: %s\n", peerAddr)
-
-	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
-	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("parse peer addr: %w", err)
+		return err
 	}
 
-	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
-
-	fmt.Printf("Dialing QUIC at %s...\n", peerAddr)
+	fmt.Printf("Dialing QUIC at %s...\n", peerUDP)
 	info, err := os.Stat(target)
 	if err != nil {
 		return err
@@ -691,32 +697,16 @@ func sendPipeNAT(ctx context.Context, relayURL, code string, fingerprint []byte)
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
 	}
-	localPort := udpConn.LocalAddr().(*net.UDPAddr).Port
 
-	fmt.Fprintf(os.Stderr, "Querying STUN (%s)...\n", nat.DefaultSTUN)
-	externalAddr, err := nat.DiscoverWithConn(udpConn, nat.DefaultSTUN)
+	// pipe モードは stdout がデータ経路なので、表示は stderr に出す。
+	externalAddr, err := natExternalAddr(udpConn, os.Stderr)
 	if err != nil {
-		ip, e2 := nat.DiscoverExternalIP(nat.DefaultSTUN)
-		if e2 != nil {
-			_ = udpConn.Close()
-			return fmt.Errorf("STUN: %w", e2)
-		}
-		externalAddr = fmt.Sprintf("%s:%d", ip, localPort)
+		return err
 	}
-
-	peerAddr, err := nat.Rendezvous(relayURL, code, externalAddr)
+	peerUDP, err := natRendezvousAndPunch(ctx, udpConn, relayURL, code, externalAddr, nil)
 	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("rendezvous: %w", err)
+		return err
 	}
-
-	peerUDP, err := net.ResolveUDPAddr("udp4", peerAddr)
-	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("parse peer addr: %w", err)
-	}
-
-	nat.HolePunch(ctx, udpConn, peerUDP, 20, 50*time.Millisecond)
 
 	return transfer.SendPipeNAT(ctx, udpConn, peerUDP, fingerprint)
 }
