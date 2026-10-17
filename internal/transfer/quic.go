@@ -900,6 +900,15 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 // peerKey は制御ストリームで確認したピアの静的公開鍵。
 // #184: チャンクのバイト範囲が non-overlapping かつファイルサイズ内に収まることを検証する。
 func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar io.Writer, peerKey []byte, compressed bool) (ChunkMeta, error) {
+	return acceptChunkStream(ctx, conn, bar, peerKey, compressed, func(ChunkMeta) (*os.File, error) { return f, nil })
+}
+
+// acceptChunkStream は単一ファイル受信とディレクトリ受信で共通のチャンク受信本体 (#624)。
+// ストリーム accept → Noise → ChunkMeta → 範囲検証 → (zstd 解凍 →) 書き込みを行う。
+// 書き込み先ファイルは ChunkMeta を見て target が決める (単一ファイルは常に同じ f、
+// ディレクトリは FileIndex で選ぶ)。target のエラーは検証失敗としてそのまま返す。
+// 書き込み開始前の失敗は ChunkMeta{} を、書き込み中の失敗は読み取り済みの cm を返す。
+func acceptChunkStream(ctx context.Context, conn *quic.Conn, bar io.Writer, peerKey []byte, compressed bool, target func(ChunkMeta) (*os.File, error)) (ChunkMeta, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("accept chunk stream: %w", err)
@@ -914,6 +923,10 @@ func acceptChunkWithMeta(ctx context.Context, conn *quic.Conn, f *os.File, bar i
 	cm, err := readChunkMeta(ns)
 	if err != nil {
 		return ChunkMeta{}, fmt.Errorf("chunk meta: %w", err)
+	}
+	f, err := target(cm)
+	if err != nil {
+		return ChunkMeta{}, err
 	}
 	if err := validateChunkRange(f, cm); err != nil {
 		return ChunkMeta{}, err
