@@ -136,19 +136,24 @@ func (s *RelayServer) evictExpiredBuckets() {
 			return
 		case <-ticker.C:
 		}
-		cutoff := time.Now().Add(-(rateWindow + rateBucketGrace))
-		s.mu.Lock()
-		for ip, b := range s.ipRate {
-			if b.since.Before(cutoff) {
-				delete(s.ipRate, ip)
-			}
+		s.evictBucketsBefore(time.Now().Add(-(rateWindow + rateBucketGrace)))
+	}
+}
+
+// evictBucketsBefore は since が cutoff より厳密に古い ipRate / ipCreateRate エントリを削除する。
+// ちょうど cutoff のエントリは残す。
+func (s *RelayServer) evictBucketsBefore(cutoff time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ip, b := range s.ipRate {
+		if b.since.Before(cutoff) {
+			delete(s.ipRate, ip)
 		}
-		for ip, b := range s.ipCreateRate {
-			if b.since.Before(cutoff) {
-				delete(s.ipCreateRate, ip)
-			}
+	}
+	for ip, b := range s.ipCreateRate {
+		if b.since.Before(cutoff) {
+			delete(s.ipCreateRate, ip)
 		}
-		s.mu.Unlock()
 	}
 }
 
