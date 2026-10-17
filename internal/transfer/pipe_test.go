@@ -1,3 +1,5 @@
+//go:build !integration
+
 package transfer
 
 import (
@@ -116,12 +118,12 @@ func TestPipeNAT_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lnConn.Close()
+	defer func() { _ = lnConn.Close() }()
 	sndConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sndConn.Close()
+	defer func() { _ = sndConn.Close() }()
 
 	origStdin, origStdout, origStderr := os.Stdin, os.Stdout, os.Stderr
 	inR, inW, err := os.Pipe()
@@ -179,7 +181,7 @@ func TestPipeNAT_DialFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sndConn.Close()
+	defer func() { _ = sndConn.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = SendPipeNAT(ctx, sndConn, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 59998}, []byte("fp"))
@@ -194,7 +196,7 @@ func TestPipeNAT_ListenCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lnConn.Close()
+	defer func() { _ = lnConn.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = ListenPipeNAT(ctx, lnConn)
