@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -371,5 +372,60 @@ func TestHandleDownload_ConcurrentGET(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("file should be removed after download, stat err=%v", err)
+	}
+}
+
+// TestEvictDownloads_RemovesExpiredOnly は TTL 超過の未取得ファイルだけが
+// ディスクと downloads から削除されることを確認する (#586)。
+func TestEvictDownloads_RemovesExpiredOnly(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old, fresh, untracked := mk("old"), mk("fresh"), mk("untracked")
+	now := time.Now()
+	s.dlMu.Lock()
+	s.downloads["old"], s.dlAt["old"] = old, now.Add(-(downloadTTL + time.Minute))
+	s.downloads["fresh"], s.dlAt["fresh"] = fresh, now.Add(-time.Minute)
+	s.downloads["untracked"] = untracked // 受信時刻の記録なし
+	s.dlMu.Unlock()
+
+	s.evictDownloads(now)
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("expired file should be removed from disk, stat err = %v", err)
+	}
+	for _, p := range []string{fresh, untracked} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s must be kept: %v", filepath.Base(p), err)
+		}
+	}
+	s.dlMu.RLock()
+	_, oldLeft := s.downloads["old"]
+	_, oldAtLeft := s.dlAt["old"]
+	_, freshLeft := s.downloads["fresh"]
+	_, untrackedLeft := s.downloads["untracked"]
+	s.dlMu.RUnlock()
+	if oldLeft || oldAtLeft || !freshLeft || !untrackedLeft {
+		t.Errorf("map state wrong: old=%v oldAt=%v fresh=%v untracked=%v", oldLeft, oldAtLeft, freshLeft, untrackedLeft)
+	}
+}
+
+// TestEvictDownloadsLoop_StopsOnCancel は掃除 goroutine が ctx 終了で戻ることを確認する。
+func TestEvictDownloadsLoop_StopsOnCancel(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.evictDownloadsLoop(ctx, 5*time.Millisecond); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("evictDownloadsLoop did not stop after cancel")
 	}
 }
