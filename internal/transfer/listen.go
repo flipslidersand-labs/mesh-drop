@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -96,6 +97,15 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 		return doReceiveDir(ctx, conn, meta, outDir, peerKey, dirDone)
 	default:
 		outPath := filepath.Join(outDir, filepath.Base(meta.Name))
+		// #639: tmp ファイル/チェックポイントは outPath から決まる固定パスなので、同名ファイルの
+		// 並行受信は同じ tmp を奪い合い破損する。2本目以降は明示エラーで拒否する。
+		release, ok := claimOutPath(outPath)
+		if !ok {
+			err := fmt.Errorf("%w: %s", errReceiveInProgress, filepath.Base(meta.Name))
+			conn.CloseWithError(1, err.Error()) //nolint:errcheck
+			return err
+		}
+		defer release()
 		if err := receiveFileToPath(ctx, conn, meta, cp, peerKey, outPath); err != nil {
 			return err
 		}
@@ -109,6 +119,22 @@ func dispatchConnToDir(ctx context.Context, conn *quic.Conn, outDir, peerAddr st
 		}
 		return nil
 	}
+}
+
+// errReceiveInProgress は同名ファイルの受信が既に進行中のときのエラー。
+var errReceiveInProgress = errors.New("a file with the same name is already being received")
+
+// recvInFlight は受信中の最終パスの集合。ListenContinuous の並行接続間で共有する。
+var recvInFlight sync.Map // cleaned outPath → struct{}
+
+// claimOutPath は outPath の受信権を取る。既に受信中なら ok=false。
+// 成功時は返された release を受信終了時に呼ぶこと。
+func claimOutPath(outPath string) (release func(), ok bool) {
+	key := filepath.Clean(outPath)
+	if _, loaded := recvInFlight.LoadOrStore(key, struct{}{}); loaded {
+		return nil, false
+	}
+	return func() { recvInFlight.Delete(key) }, true
 }
 
 // receiveFileToPath receives a single file directly into outDir (destDir of outPath).
