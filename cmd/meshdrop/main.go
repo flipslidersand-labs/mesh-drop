@@ -188,12 +188,8 @@ func cmdReceive() *cobra.Command {
 				return err
 			}
 			// config.yaml から未指定フラグを補完する
-			if !cmd.Flags().Changed("relay") && globalCfg.Relay != "" {
-				relayURL = globalCfg.Relay
-			}
-			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
-				port = globalCfg.Port
-			}
+			applyDefault(cmd, "relay", &relayURL, globalCfg.Relay)
+			applyDefault(cmd, "port", &port, globalCfg.Port)
 			if port < 1 || port > 65535 {
 				return fmt.Errorf("--port must be between 1 and 65535, got %d", port)
 			}
@@ -319,12 +315,8 @@ func cmdSend() *cobra.Command {
 				return err
 			}
 			// config.yaml から未指定フラグを補完する
-			if !cmd.Flags().Changed("relay") && globalCfg.Relay != "" {
-				relayURL = globalCfg.Relay
-			}
-			if !cmd.Flags().Changed("rate-limit") && globalCfg.RateLimit != "" {
-				rateLimitStr = globalCfg.RateLimit
-			}
+			applyDefault(cmd, "relay", &relayURL, globalCfg.Relay)
+			applyDefault(cmd, "rate-limit", &rateLimitStr, globalCfg.RateLimit)
 			return initSessionOrWarn()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
