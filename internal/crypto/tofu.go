@@ -3,6 +3,7 @@ package crypto
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,9 +19,25 @@ import (
 type KnownPeers struct {
 	path     string
 	mu       sync.Mutex
-	cache    map[string]struct{} // 既知フィンガープリントのメモリキャッシュ
-	inflight singleflight.Group  // 同一鍵の Verify を1つに集約
-	promptMu sync.Mutex          // TTY プロンプトを直列化 — 異なるピアの同時接続でも混在しない
+	cache    map[string]struct{}       // 既知フィンガープリントのメモリキャッシュ
+	inflight singleflight.Group        // 同一鍵の Verify を1つに集約
+	promptMu sync.Mutex                // TTY プロンプトを直列化 — 異なるピアの同時接続でも混在しない
+	openTTY  func() (promptTTY, error) // nil なら /dev/tty を開く。テストで差し替える (#637)
+}
+
+// promptTTY はピア信頼の確認プロンプトに使う端末。*os.File が満たす。
+type promptTTY interface {
+	io.ReadWriteCloser
+	SetDeadline(t time.Time) error
+}
+
+// openDevTTY は /dev/tty を読み書き両用で開く。
+func openDevTTY() (promptTTY, error) {
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 // NewKnownPeers creates a KnownPeers store backed by dir/known_peers.
@@ -91,7 +108,11 @@ func (kp *KnownPeers) promptAndTrust(pub []byte, key string) error {
 
 	// /dev/tty を読み書き両用で開く。
 	// stdout/stderr がリダイレクトされていてもプロンプトをユーザーに表示できる。
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	open := kp.openTTY
+	if open == nil {
+		open = openDevTTY
+	}
+	tty, err := open()
 	if err != nil {
 		return fmt.Errorf("peer verification failed: no TTY available (use --allow-no-tofu to skip): %w", err)
 	}
