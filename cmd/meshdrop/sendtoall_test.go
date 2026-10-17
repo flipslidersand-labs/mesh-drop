@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
 )
 
 // stubSend は sendFileFn / sendDirFn を差し替え、呼び出された (addr → fingerprint) を記録する。
