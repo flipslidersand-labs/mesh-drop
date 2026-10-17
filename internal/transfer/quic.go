@@ -762,41 +762,17 @@ func doReceiveFileResume(ctx context.Context, conn *quic.Conn, meta Meta, cp *ch
 	if remaining < 0 {
 		remaining = 0
 	}
-	errCh := make(chan error, remaining)
-
-	// #153/#513: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
-	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
-	// #513: ctx をキャンセルして AcceptStream が即座にキャンセルエラーで返るようにする。
-	innerCtx, cancelInner := context.WithCancel(ctx)
-	defer cancelInner()
-	var closeOnce sync.Once
-	closeConn := func(cerr error) {
-		closeOnce.Do(func() {
-			cancelInner()
-			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
-		})
-	}
-
-	var wg sync.WaitGroup
-	for i := 0; i < remaining; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cm, aerr := acceptChunkWithMeta(innerCtx, conn, f, bar, peerKey, meta.Compressed)
-			if aerr != nil {
-				closeConn(aerr)
-				errCh <- aerr
-				return
-			}
-			errCh <- cp.markDone(cm.Index)
-		}()
-	}
-	wg.Wait()
-	close(errCh)
+	results := runChunkWorkers(ctx, conn, remaining, func(wctx context.Context) error {
+		cm, aerr := acceptChunkWithMeta(wctx, conn, f, bar, peerKey, meta.Compressed)
+		if aerr != nil {
+			return aerr
+		}
+		return cp.markDone(cm.Index)
+	})
 	fmt.Println()
 
 	var errs []error
-	for e := range errCh {
+	for _, e := range results {
 		if e != nil {
 			errs = append(errs, e)
 		}
