@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
 )
 
 func stubBrowse(t *testing.T, peers []discovery.Peer, err error) {
