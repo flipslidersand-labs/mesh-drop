@@ -3,7 +3,6 @@ package transfer
 import (
 	"context"
 	"io"
-	"math"
 
 	"golang.org/x/time/rate"
 )
@@ -19,7 +18,7 @@ func NewRateLimiter(bytesPerSec int64) *rate.Limiter {
 	if bytesPerSec <= 0 {
 		return nil
 	}
-	burst := int(math.Min(float64(bytesPerSec), float64(maxBurst)))
+	burst := int(min(bytesPerSec, int64(maxBurst)))
 	return rate.NewLimiter(rate.Limit(bytesPerSec), burst)
 }
 
