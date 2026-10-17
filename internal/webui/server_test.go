@@ -639,15 +639,7 @@ func TestRateLimiter_EvictPreservesActiveIPs(t *testing.T) {
 	}
 
 	// Simulate eviction with now — IP was just seen, so it must be retained.
-	rl.mu.Lock()
-	now := time.Now()
-	for iip, ts := range rl.lastSeen {
-		if now.Sub(ts) > idleTimeout {
-			delete(rl.visitors, iip)
-			delete(rl.lastSeen, iip)
-		}
-	}
-	rl.mu.Unlock()
+	rl.evictOnce(time.Now())
 
 	// The limiter for this IP must still be exhausted (not reset).
 	if rl.getVisitor(ip).Allow() {
@@ -668,16 +660,7 @@ func TestRateLimiter_EvictRemovesIdleIPs(t *testing.T) {
 	rl.lastSeen[ip] = time.Now().Add(-(idleTimeout + time.Second))
 	rl.mu.Unlock()
 
-	// Run eviction logic directly (same logic as evict goroutine).
-	rl.mu.Lock()
-	now := time.Now()
-	for iip, ts := range rl.lastSeen {
-		if now.Sub(ts) > idleTimeout {
-			delete(rl.visitors, iip)
-			delete(rl.lastSeen, iip)
-		}
-	}
-	rl.mu.Unlock()
+	rl.evictOnce(time.Now())
 
 	rl.mu.Lock()
 	_, visitorExists := rl.visitors[ip]
@@ -687,6 +670,41 @@ func TestRateLimiter_EvictRemovesIdleIPs(t *testing.T) {
 	if visitorExists || seenExists {
 		t.Fatal("idle IP was not removed by eviction")
 	}
+}
+
+// TestRateLimiter_EvictGoroutineRemovesIdle は実際の evict goroutine が ticker 経由で
+// アイドル IP だけを削除することを確認する (#633)。
+// evictInterval はパッケージ変数なので、並列実行しない。
+func TestRateLimiter_EvictGoroutineRemovesIdle(t *testing.T) {
+	orig := evictInterval
+	evictInterval = 10 * time.Millisecond
+	t.Cleanup(func() { evictInterval = orig })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rl := newRateLimiter(ctx)
+
+	_ = rl.getVisitor("10.0.0.3") // idle にする
+	_ = rl.getVisitor("10.0.0.4") // active のまま
+	rl.mu.Lock()
+	rl.lastSeen["10.0.0.3"] = time.Now().Add(-(idleTimeout + time.Second))
+	rl.mu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rl.mu.Lock()
+		_, idleLeft := rl.visitors["10.0.0.3"]
+		_, activeLeft := rl.visitors["10.0.0.4"]
+		rl.mu.Unlock()
+		if !idleLeft {
+			if !activeLeft {
+				t.Fatal("active IP was evicted")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("evict goroutine did not remove idle IP within 2s")
 }
 
 // TestRateLimiter_EvictStopsOnContextCancel verifies that the evict goroutine
