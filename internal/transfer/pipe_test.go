@@ -3,9 +3,14 @@ package transfer
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
+	"io"
+	"net"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestPipeGo_WriteChunkMeta は writeChunkMeta → readChunkMeta のラウンドトリップを検証する。
@@ -97,19 +102,105 @@ func TestSendPipe_NilFingerprintUsesVerifyCallback(t *testing.T) {
 	}
 }
 
-// TestSendPipeNAT_AcceptsFingerprint は SendPipeNAT が fingerprint パラメータを
-// 受け取ることを compile 時に確認するスモークテスト。
-func TestSendPipeNAT_AcceptsFingerprint(t *testing.T) {
+// TestPipeNAT_RoundTrip は ListenPipeNAT / SendPipeNAT を実ソケットで end-to-end に通し、
+// stdin の内容が stdout に欠落なく届くことを検証する (#632)。
+// NAT 越え済みソケットの代わりにローカルの UDP ソケット2つを使う。
+func TestPipeNAT_RoundTrip(t *testing.T) {
+	rtSkipShort(t)
+	payload := make([]byte, 1<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	lnConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lnConn.Close()
+	sndConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sndConn.Close()
+
+	origStdin, origStdout, origStderr := os.Stdin, os.Stdout, os.Stderr
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fingerprint=nil の WARNING を捨てる。
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	os.Stdin, os.Stdout, os.Stderr = inR, outW, devNull
+	t.Cleanup(func() { os.Stdin, os.Stdout, os.Stderr = origStdin, origStdout, origStderr })
+
+	go func() {
+		_, _ = inW.Write(payload)
+		_ = inW.Close()
+	}()
+	gotCh := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(outR)
+		gotCh <- b
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- ListenPipeNAT(ctx, lnConn) }()
+
+	sendErr := SendPipeNAT(ctx, sndConn, lnConn.LocalAddr().(*net.UDPAddr), nil)
+	lerr := <-listenErr
+	os.Stdout = origStdout
+	_ = outW.Close()
+	got := <-gotCh
+
+	if sendErr != nil {
+		t.Fatalf("SendPipeNAT: %v", sendErr)
+	}
+	if lerr != nil {
+		t.Fatalf("ListenPipeNAT: %v", lerr)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("pipe output mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// TestPipeNAT_DialFailure は到達不能なピアへの SendPipeNAT が dial エラーを返すことを確認する。
+func TestPipeNAT_DialFailure(t *testing.T) {
+	sndConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sndConn.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	err = SendPipeNAT(ctx, sndConn, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 59998}, []byte("fp"))
+	if err == nil || !strings.Contains(err.Error(), "QUIC dial NAT") {
+		t.Fatalf("SendPipeNAT error = %v, want QUIC dial NAT error", err)
+	}
+}
 
-	udpConn, err := os.Open(os.DevNull) // placeholder — すぐ失敗するので型確認のみ
-	_ = udpConn
-	_ = err
-	// 実際の呼び出しは integration テストで検証。ここでは signature のみ確認。
-	// (compile すれば OK)
-	t.Log("SendPipeNAT signature accepted fingerprint []byte param")
-	_ = ctx
+// TestPipeNAT_ListenCancel は ctx キャンセルで ListenPipeNAT が Accept を抜けることを確認する。
+func TestPipeNAT_ListenCancel(t *testing.T) {
+	lnConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lnConn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = ListenPipeNAT(ctx, lnConn)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListenPipeNAT error = %v, want context.Canceled", err)
+	}
 }
 
 // TestPipeGo_ListenPipe_CancelImmediately は ListenPipe をポート 0 で起動してすぐ
