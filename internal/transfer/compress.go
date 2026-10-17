@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -54,34 +55,12 @@ func isAlreadyCompressed(path string) bool {
 	buf = buf[:n]
 
 	for _, magic := range compressedMagics {
-		if len(buf) >= len(magic) {
-			match := true
-			for i, b := range magic {
-				if buf[i] != b {
-					match = false
-					break
-				}
-			}
-			if match {
-				return true
-			}
-		}
-	}
-	// mp4 の ftyp ボックスはオフセット 4 にある (先頭 4 バイトはボックスサイズ)。
-	if n >= 8 {
-		ftyp := []byte{0x66, 0x74, 0x79, 0x70}
-		match := true
-		for i, b := range ftyp {
-			if buf[4+i] != b {
-				match = false
-				break
-			}
-		}
-		if match {
+		if bytes.HasPrefix(buf, magic) {
 			return true
 		}
 	}
-	return false
+	// mp4 の ftyp ボックスはオフセット 4 にある (先頭 4 バイトはボックスサイズ)。
+	return len(buf) >= 8 && bytes.HasPrefix(buf[4:], []byte{0x66, 0x74, 0x79, 0x70})
 }
 
 // zstdEncoderLevel は compLevel (1-9, 0=default) を zstd.EncoderLevel に変換する。

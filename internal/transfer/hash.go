@@ -28,28 +28,5 @@ func hashReader(r io.Reader) (string, error) {
 // #187: Use the already-open file handle and ReadAt to compute the hash,
 // so the same kernel file-description is used for both hashing and sending.
 func hashFileAt(f *os.File, size int64) (string, error) {
-	h := blake3.New(32, nil)
-	const bufSize = 1 << 20 // 1 MiB read buffer
-	buf := make([]byte, bufSize)
-	var off int64
-	for off < size {
-		want := int64(bufSize)
-		if size-off < want {
-			want = size - off
-		}
-		n, err := f.ReadAt(buf[:want], off)
-		if n > 0 {
-			if _, herr := h.Write(buf[:n]); herr != nil {
-				return "", herr
-			}
-			off += int64(n)
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", err
-		}
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hashReader(io.NewSectionReader(f, 0, size))
 }
