@@ -446,44 +446,26 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		start := time.Now()
 
-		// Publish heartbeat progress events while sending (#238).
-		done := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(300 * time.Millisecond)
-			defer ticker.Stop()
-			pct := int64(0)
-			for {
-				select {
-				case <-done:
-					return
-				case <-ticker.C:
-					// Increment by a small amount so the bar is animated;
-					// exact bytes are not available without deeper integration.
-					if pct < total*9/10 {
-						pct += total / 20
-					}
-					elapsed := time.Since(start)
-					elapsedMs := elapsed.Milliseconds()
-					speedBps := int64(0)
-					if elapsed.Seconds() > 0 {
-						speedBps = int64(float64(pct) / elapsed.Seconds())
-					}
-					etaMs := int64(0)
-					if speedBps > 0 && total > pct {
-						etaMs = int64(float64(total-pct) / float64(speedBps) * 1000)
-					}
-					s.hub.publish(ProgressEvent{
-						ID: id, Direction: "send",
-						File: safeFilename, Peer: peerAddr,
-						Sent: pct, Total: total,
-						ElapsedMs: elapsedMs, SpeedBps: speedBps, EtaMs: etaMs,
-					})
-				}
+		// #615: 擬似タイマーを削除し、progressFn で実転送バイト数を配信する (handleSendDir と同じ)。
+		progressFn := func(sent, tot int64) {
+			elapsed := time.Since(start)
+			speedBps := int64(0)
+			if elapsed.Seconds() > 0 {
+				speedBps = int64(float64(sent) / elapsed.Seconds())
 			}
-		}()
+			etaMs := int64(0)
+			if speedBps > 0 && tot > sent {
+				etaMs = int64(float64(tot-sent) / float64(speedBps) * 1000)
+			}
+			s.hub.publish(ProgressEvent{
+				ID: id, Direction: "send",
+				File: safeFilename, Peer: peerAddr,
+				Sent: sent, Total: tot,
+				ElapsedMs: elapsed.Milliseconds(), SpeedBps: speedBps, EtaMs: etaMs,
+			})
+		}
 
-		sendErr := transfer.Send(s.runCtx, peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false)
-		close(done)
+		sendErr := transfer.SendProgress(s.runCtx, peerAddr, tmp.Name(), 4, nil, lim, compress, compLevel, false, progressFn)
 
 		elapsed := time.Since(start)
 		elapsedMs := elapsed.Milliseconds()

@@ -120,13 +120,20 @@ func ListenNAT(ctx context.Context, udpConn *net.UDPConn) error {
 var Verbose bool
 
 func Send(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+	return SendProgress(ctx, addr, filePath, nChunks, fingerprint, lim, compressed, compLevel, noResume, nil)
+}
+
+// SendProgress は Send に進捗コールバックを加えたもの (#615)。
+// progressFn は転送済みの非圧縮バイト数 (sent, total) を通知する。nil 可。
+// 複数チャンクが並列に送られるため、progressFn は複数 goroutine から呼ばれうる。
+func SendProgress(ctx context.Context, addr, filePath string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	t0 := time.Now()
 	conn, err := quic.DialAddr(ctx, addr, clientTLSForFingerprint(fingerprint), quicConfig())
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 	t1 := time.Now()
-	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume)
+	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume, progressFn)
 }
 
 // SendNAT は NAT Traversal 済みソケット経由でファイルを送信する。
@@ -139,7 +146,7 @@ func SendNAT(ctx context.Context, udpConn *net.UDPConn, peerAddr *net.UDPAddr, f
 		return fmt.Errorf("QUIC dial NAT: %w", err)
 	}
 	t1 := time.Now()
-	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume)
+	return doSend(ctx, conn, t0, t1, filePath, nChunks, lim, compressed, compLevel, noResume, nil)
 }
 
 // --- accept & dispatch ---
@@ -423,7 +430,7 @@ func checkDirDone(outDir string, files []FileMeta) []string {
 // doSend はファイルを conn 経由で送信する。
 // t0: QUIC dial 呼び出し前、t1: QUIC 接続確立後の時刻。
 // Noise XX ハンドシェイク完了後の t2 は内部で計測し、debug ログに出力する。
-func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
+func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath string, nChunks int, lim *rate.Limiter, compressed bool, compLevel int, noResume bool, progressFn func(sent, total int64)) error {
 	defer func() { _ = conn.CloseWithError(0, "done") }()
 
 	if nChunks < 1 {
@@ -516,6 +523,13 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 
 	chunkSize := (info.Size() + int64(nChunks) - 1) / int64(nChunks)
 	bar := progressbar.DefaultBytes(info.Size(), "sending  ")
+	// #615: progressFn があれば実際に書き込んだバイト数を累積して通知する。
+	var barW io.Writer = bar
+	var sent atomic.Int64
+	totalSize := info.Size()
+	if progressFn != nil {
+		barW = io.MultiWriter(bar, &countWriter{fn: func(n int64) { progressFn(sent.Add(n), totalSize) }})
+	}
 
 	// 完了済みチャンクは進捗バーだけ進める
 	for idx, skip := range skipSet {
@@ -527,7 +541,7 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 		if off+sz > info.Size() {
 			sz = info.Size() - off
 		}
-		_, _ = bar.Write(make([]byte, sz))
+		_, _ = barW.Write(make([]byte, sz))
 	}
 
 	errs := make([]error, nChunks)
@@ -546,7 +560,7 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 			if offset+size > info.Size() {
 				size = info.Size() - offset
 			}
-			errs[i] = sendChunk(ctx, conn, f, i, offset, size, bar, peerKey, lim, compressed, compLevel)
+			errs[i] = sendChunk(ctx, conn, f, i, offset, size, barW, peerKey, lim, compressed, compLevel)
 		}(i)
 	}
 	wg.Wait()
