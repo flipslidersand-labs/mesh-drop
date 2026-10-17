@@ -841,31 +841,37 @@ func doReceiveFile(ctx context.Context, conn *quic.Conn, meta Meta, peerKey []by
 // sendChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
 // #147: f は呼び出し元で一度だけ開かれた *os.File。ReadAt を使うため seek 不要で並列安全。
 func sendChunk(ctx context.Context, conn *quic.Conn, f *os.File, index int, offset, size int64, bar io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
+	return sendChunkStream(ctx, conn, f, ChunkMeta{Index: index, Offset: offset, Size: size}, bar, peerKey, lim, compressed, compLevel)
+}
+
+// sendChunkStream は単一ファイル転送とディレクトリ転送で共通のチャンク送信本体 (#623)。
+// 新しいストリームを開き、Noise ハンドシェイク → ChunkMeta → (zstd →) 本体の順に送る。
+// cm.FileIndex は単一ファイルでは 0。bar は非圧縮バイト数で進捗を受け取る。
+func sendChunkStream(ctx context.Context, conn *quic.Conn, f *os.File, cm ChunkMeta, bar io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		return fmt.Errorf("chunk %d open: %w", index, err)
+		return fmt.Errorf("chunk %d open: %w", cm.Index, err)
 	}
 	defer func() { _ = stream.Close() }()
 
 	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
 	if err != nil {
-		return fmt.Errorf("chunk %d noise: %w", index, err)
+		return fmt.Errorf("chunk %d noise: %w", cm.Index, err)
 	}
 
-	if err := writeChunkMeta(ns, ChunkMeta{Index: index, Offset: offset, Size: size}); err != nil {
-		return fmt.Errorf("chunk %d meta: %w", index, err)
+	if err := writeChunkMeta(ns, cm); err != nil {
+		return fmt.Errorf("chunk %d meta: %w", cm.Index, err)
 	}
 
 	// #217: SectionReader で offset/size をストリーミング送信。
 	// ReadAt ベースなので concurrent-safe かつ full-size バッファ確保不要。
-	sr := io.NewSectionReader(f, offset, size)
+	sr := io.NewSectionReader(f, cm.Offset, cm.Size)
 	src := NewThrottledReader(ctx, sr, lim)
 	if compressed {
 		enc, encErr := newZstdEncoder(ns, compLevel)
 		if encErr != nil {
-			return fmt.Errorf("chunk %d: %w", index, encErr)
+			return fmt.Errorf("chunk %d: %w", cm.Index, encErr)
 		}
-		// bar は非圧縮バイト数で進捗表示する。
 		_, err = io.Copy(enc, io.TeeReader(src, bar))
 		if cerr := enc.Close(); cerr != nil && err == nil {
 			err = cerr

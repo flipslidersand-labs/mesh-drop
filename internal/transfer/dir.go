@@ -439,48 +439,15 @@ func (cw *countWriter) Write(p []byte) (int, error) {
 
 // sendDirChunk は conn 上に新しい QUIC ストリームを開き、チャンクを転送する。
 // #483: f は呼び出し元で一度だけ open された *os.File。
-// sendChunk と同じく io.NewSectionReader + ReadAt を使うため seek 不要で並列安全。
+// 送信本体は単一ファイルと共通の sendChunkStream (#623)。
 func sendDirChunk(ctx context.Context, conn *quic.Conn, f *os.File, idx int, a chunkAssignment, bar io.Writer, progressW io.Writer, peerKey []byte, lim *rate.Limiter, compressed bool, compLevel int) error {
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return fmt.Errorf("chunk %d open: %w", idx, err)
-	}
-	defer func() { _ = stream.Close() }()
-
-	ns, err := chunkHandshakeInitiator(ctx, stream, peerKey)
-	if err != nil {
-		return fmt.Errorf("chunk %d noise: %w", idx, err)
-	}
-
-	cm := ChunkMeta{Index: idx, Offset: a.offset, Size: a.size, FileIndex: a.fileIndex}
-	if err := writeChunkMeta(ns, cm); err != nil {
-		return fmt.Errorf("chunk %d meta: %w", idx, err)
-	}
-
-	// #483: SectionReader で offset/size をストリーミング送信。
-	// ReadAt ベースなので concurrent-safe かつ seek 不要。sendChunk と同一パターン。
-	sr := io.NewSectionReader(f, a.offset, a.size)
-	src := NewThrottledReader(ctx, sr, lim)
-
 	// #317: progressW が nil でない場合は bar と合わせてバイト数を通知する
-	teeTarget := io.Writer(bar)
+	teeTarget := bar
 	if progressW != nil {
 		teeTarget = io.MultiWriter(bar, progressW)
 	}
-
-	if compressed {
-		enc, encErr := newZstdEncoder(ns, compLevel)
-		if encErr != nil {
-			return fmt.Errorf("chunk %d: %w", idx, encErr)
-		}
-		_, err = io.Copy(enc, io.TeeReader(src, teeTarget))
-		if cerr := enc.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-		return err
-	}
-	_, err = io.Copy(io.MultiWriter(ns, teeTarget), src)
-	return err
+	cm := ChunkMeta{Index: idx, Offset: a.offset, Size: a.size, FileIndex: a.fileIndex}
+	return sendChunkStream(ctx, conn, f, cm, teeTarget, peerKey, lim, compressed, compLevel)
 }
 
 // doReceiveDir はバッチ Meta を受け取ってディレクトリ構造を復元する。
