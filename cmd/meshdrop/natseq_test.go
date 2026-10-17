@@ -15,7 +15,7 @@ func newUDP(t *testing.T) *net.UDPConn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
@@ -28,7 +28,7 @@ func isClosed(c *net.UDPConn) bool {
 func TestNatRendezvousAndPunch(t *testing.T) {
 	t.Run("success calls onFound and returns resolved peer", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(`{"peer":"127.0.0.1:45678"}`))
+			_, _ = w.Write([]byte(`{"peer":"127.0.0.1:45678"}`))
 		}))
 		defer srv.Close()
 		c := newUDP(t)
@@ -60,7 +60,7 @@ func TestNatRendezvousAndPunch(t *testing.T) {
 	})
 	t.Run("unparseable peer closes conn", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(`{"peer":"not-an-addr"}`))
+			_, _ = w.Write([]byte(`{"peer":"not-an-addr"}`))
 		}))
 		defer srv.Close()
 		c := newUDP(t)
