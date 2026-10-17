@@ -188,9 +188,17 @@ type Server struct {
 	history []HistoryEntry
 
 	dlMu      sync.RWMutex
-	downloads map[string]string // id → abs file path
+	downloads map[string]string    // id → abs file path
+	dlAt      map[string]time.Time // id → 受信完了時刻（TTL による掃除用、#586）
 	recvDir   string
 }
+
+// downloadTTL は受信済みでもダウンロードされないファイルを保持する時間。
+// 超過分は evictDownloads がディスクと downloads から削除する (#586)。
+const downloadTTL = time.Hour
+
+// downloadEvictInterval は TTL 超過ファイルの掃除間隔。
+const downloadEvictInterval = time.Minute
 
 func New(addr string, discoverTimeout time.Duration) *Server {
 	return &Server{
@@ -199,6 +207,7 @@ func New(addr string, discoverTimeout time.Duration) *Server {
 		hub:       newHub(),
 		runCtx:    context.Background(),
 		downloads: make(map[string]string),
+		dlAt:      make(map[string]time.Time),
 	}
 }
 
@@ -262,6 +271,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer os.RemoveAll(recvDir)
 
 	go s.runReceiver(ctx, recvDir)
+	go s.evictDownloadsLoop(ctx, downloadEvictInterval)
 
 	rl := newRateLimiter(ctx)
 
@@ -761,6 +771,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		s.dlMu.Lock()
 		path, ok = s.downloads[id]
 		delete(s.downloads, id)
+		delete(s.dlAt, id)
 		s.dlMu.Unlock()
 	} else {
 		s.dlMu.RLock()
@@ -856,6 +867,40 @@ func secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// evictDownloadsLoop は interval ごとに TTL 超過の未取得ファイルを掃除する。ctx 終了で止まる。
+func (s *Server) evictDownloadsLoop(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			s.evictDownloads(now)
+		}
+	}
+}
+
+// evictDownloads は受信から downloadTTL を超えた未取得ファイルをディスクと downloads から削除する。
+// 受信時刻の記録がないエントリは対象外（取得済みまたは未追跡）。
+func (s *Server) evictDownloads(now time.Time) {
+	var paths []string
+	s.dlMu.Lock()
+	for id, at := range s.dlAt {
+		if now.Sub(at) > downloadTTL {
+			if p, ok := s.downloads[id]; ok {
+				paths = append(paths, p)
+			}
+			delete(s.downloads, id)
+			delete(s.dlAt, id)
+		}
+	}
+	s.dlMu.Unlock()
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+}
+
 // runReceiver starts a QUIC listener that accepts incoming transfers in a loop.
 // Received files land in recvDir and become available via /api/downloads/{id}.
 func (s *Server) runReceiver(ctx context.Context, recvDir string) {
@@ -871,6 +916,7 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 
 		s.dlMu.Lock()
 		s.downloads[id] = path
+		s.dlAt[id] = time.Now()
 		s.dlMu.Unlock()
 
 		s.hub.publish(ProgressEvent{
@@ -885,4 +931,3 @@ func (s *Server) runReceiver(ctx context.Context, recvDir string) {
 		})
 	})
 }
-
