@@ -753,38 +753,12 @@ func validateDirChunkHandle(handles []fileHandle, cm ChunkMeta) error {
 }
 
 func acceptDirChunk(ctx context.Context, conn *quic.Conn, handles []fileHandle, bar io.Writer, peerKey []byte, compressed bool) error {
-	stream, err := conn.AcceptStream(ctx)
-	if err != nil {
-		return fmt.Errorf("accept chunk stream: %w", err)
-	}
-	defer func() { _ = stream.Close() }()
-
-	ns, err := chunkHandshakeResponder(ctx, stream, peerKey)
-	if err != nil {
-		return fmt.Errorf("chunk noise: %w", err)
-	}
-
-	cm, err := readChunkMeta(ns)
-	if err != nil {
-		return fmt.Errorf("chunk meta: %w", err)
-	}
-
-	if err := validateDirChunkHandle(handles, cm); err != nil {
-		return err
-	}
-	if err := validateChunkRange(handles[cm.FileIndex].f, cm); err != nil {
-		return err
-	}
-
-	ow := &offsetWriter{f: handles[cm.FileIndex].f, off: cm.Offset}
-	if compressed {
-		dec, decErr := newZstdDecoder(ns)
-		if decErr != nil {
-			return fmt.Errorf("chunk %d: %w", cm.Index, decErr)
+	// 書き込み先は ChunkMeta.FileIndex で選ぶ。本体は単一ファイルと共通の acceptChunkStream (#624)。
+	_, err := acceptChunkStream(ctx, conn, bar, peerKey, compressed, func(cm ChunkMeta) (*os.File, error) {
+		if err := validateDirChunkHandle(handles, cm); err != nil {
+			return nil, err
 		}
-		defer dec.Close()
-		return copyDecompressedN(io.MultiWriter(ow, bar), dec, cm.Size, cm.Index)
-	}
-	_, err = io.CopyN(io.MultiWriter(ow, bar), ns, cm.Size)
+		return handles[cm.FileIndex].f, nil
+	})
 	return err
 }
