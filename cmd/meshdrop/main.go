@@ -22,10 +22,10 @@ import (
 	"golang.org/x/term"
 	"golang.org/x/time/rate"
 
-	"github.com/flipslidersand/mesh-drop/internal/config"
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
-	"github.com/flipslidersand/mesh-drop/internal/nat"
-	"github.com/flipslidersand/mesh-drop/internal/transfer"
+	"github.com/flipslidersand-labs/mesh-drop/internal/config"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/nat"
+	"github.com/flipslidersand-labs/mesh-drop/internal/transfer"
 )
 
 var version string
