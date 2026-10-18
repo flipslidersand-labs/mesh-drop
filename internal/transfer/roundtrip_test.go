@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
+	"github.com/flipslidersand-labs/mesh-drop/internal/crypto"
 )
 
 // #572: defaultSession（パッケージスコープの共有グローバル）を使う Send/Listen 系関数は、

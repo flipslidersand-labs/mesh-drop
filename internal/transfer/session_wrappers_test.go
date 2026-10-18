@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
+	"github.com/flipslidersand-labs/mesh-drop/internal/crypto"
 )
 
 // These cover the package-level defaultSession wrapper functions
