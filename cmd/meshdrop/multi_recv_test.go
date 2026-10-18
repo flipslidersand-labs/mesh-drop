@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
 )
 
 func makePeer(name string) discovery.Peer {
