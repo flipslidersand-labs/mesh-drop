@@ -1,4 +1,4 @@
-module github.com/flipslidersand/mesh-drop
+module github.com/flipslidersand-labs/mesh-drop
 
 go 1.26.0
 
