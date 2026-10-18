@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
 )
 
 // --- parseFingerprint ---

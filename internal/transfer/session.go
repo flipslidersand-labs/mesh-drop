@@ -8,7 +8,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/flipslidersand/mesh-drop/internal/crypto"
+	"github.com/flipslidersand-labs/mesh-drop/internal/crypto"
 	"github.com/flynn/noise"
 )
 
