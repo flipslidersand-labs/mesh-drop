@@ -39,7 +39,7 @@ curl -L https://github.com/flipslidersand-labs/mesh-drop/releases/latest/downloa
 **Build from source** (requires Go 1.25+):
 
 ```bash
-go install github.com/flipslidersand/mesh-drop/cmd/meshdrop@latest
+go install github.com/flipslidersand-labs/mesh-drop/cmd/meshdrop@latest
 ```
 
 ### Verify a release binary (optional)
