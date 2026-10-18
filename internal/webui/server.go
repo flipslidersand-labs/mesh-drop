@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flipslidersand/mesh-drop/internal/discovery"
-	"github.com/flipslidersand/mesh-drop/internal/transfer"
+	"github.com/flipslidersand-labs/mesh-drop/internal/discovery"
+	"github.com/flipslidersand-labs/mesh-drop/internal/transfer"
 	"golang.org/x/time/rate"
 )
 
