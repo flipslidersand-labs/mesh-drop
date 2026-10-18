@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/flipslidersand/mesh-drop/internal/config"
-	"github.com/flipslidersand/mesh-drop/internal/webui"
+	"github.com/flipslidersand-labs/mesh-drop/internal/config"
+	"github.com/flipslidersand-labs/mesh-drop/internal/webui"
 )
 
 // uiAuthToken is set from --auth-token flag (or config.yaml).
