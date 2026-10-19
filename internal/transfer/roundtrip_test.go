@@ -511,6 +511,61 @@ func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
 	}
 }
 
+// TestRoundTrip_NoResumeIgnoresReceiverCheckpoint は、受信側に完了済みチェックポイントが
+// 残っていても --no-resume の再送が全チャンクを送り直して完了することの回帰テスト (#587)。
+// 以前はシングルファイルで Meta.NoResume が受信側に伝わらず、送信側は全チャンクを送るのに
+// 受信側は未完了分しか待たず、ハッシュ不一致かハングになっていた。
+func TestRoundTrip_NoResumeIgnoresReceiverCheckpoint(t *testing.T) {
+	rtSkipShort(t)
+	content := make([]byte, 256*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(t.TempDir(), "noresume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	outPath := filepath.Join(outDir, "noresume.bin")
+	restoreRename := rtFailFinalRename(t)
+
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer sndCancel()
+
+	// 1回目: 最終 rename を失敗させ、全チャンク完了のチェックポイントと tmp を残す。
+	_ = Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false)
+	statePath := checkpointPath(outPath)
+	tmpPath := outPath + ".meshdrop.tmp"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, errS := os.Stat(statePath)
+		_, errT := os.Stat(tmpPath)
+		if errS == nil && errT == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("partial state not kept after receiver error: state=%v tmp=%v", errS, errT)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2回目: 障害を除いて --no-resume で再送 → 受信側のチェックポイントを無視して完了する。
+	restoreRename()
+	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, true); err != nil {
+		t.Fatalf("Send with noResume: %v", err)
+	}
+	paths := rtWaitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("content mismatch after --no-resume resend")
+	}
+}
+
 // rtFailFinalRename は受信側の最終 rename を失敗させ、元に戻す関数を返す（t.Cleanup でも復元）。
 func rtFailFinalRename(t *testing.T) (restore func()) {
 	t.Helper()

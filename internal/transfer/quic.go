@@ -273,6 +273,10 @@ func acceptMetaDispatch(ctx context.Context, conn *quic.Conn, outDir string) (Me
 		return Meta{}, nil, nil, nil, err
 	}
 	cp := loadOrCreate(outPath, meta)
+	// #587: NoResume=true のとき送信側は全チャンクを送るので、受信側も既存の完了分を捨てて全て待つ。
+	if meta.NoResume {
+		cp.state.ChunksDone = make([]bool, meta.Chunks)
+	}
 	rs := ResumeState{ChunksDone: cp.doneIndices()}
 	if err := writeResumeState(ns, rs); err != nil {
 		slog.Warn("writeResumeState (single): failed to send resume state", "err", err)
@@ -481,6 +485,7 @@ func doSend(ctx context.Context, conn *quic.Conn, t0, t1 time.Time, filePath str
 		Chunks:     chunks,
 		Compressed: compressed,
 		CompLevel:  compLevel,
+		NoResume:   noResume, // #587: 受信側にも伝えてチェックポイントを無視させる
 	}
 	rs, peerKey, err := sendMetaGetResume(ctx, conn, meta)
 	t2 := time.Now()
