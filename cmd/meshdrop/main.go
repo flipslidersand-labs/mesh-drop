@@ -567,6 +567,13 @@ type peerResult struct {
 	dur  time.Duration
 }
 
+// sendFileFn / sendDirFn は sendToAll が使う送信関数。ネットワーク無しで集計ロジックを
+// テストできるよう差し替え可能にしている（initSessionFn と同じ方針）。
+var (
+	sendFileFn = transfer.Send
+	sendDirFn  = transfer.SendDir
+)
+
 // sendToAll は peers に並列送信し、全完了後にサマリーを表示する。
 // 一部が失敗しても他のピアへの送信は継続する。全失敗の場合のみエラーを返す。
 func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChunks int, fingerprint []byte, lim *rate.Limiter, compressed bool, compLevel int, noResume bool) error {
@@ -590,10 +597,10 @@ func sendToAll(ctx context.Context, peers []discovery.Peer, target string, nChun
 			var sendErr error
 			if isDir {
 				fmt.Printf("→ [%s] Connecting (%s) [dir, chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.SendDir(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume, nil)
+				sendErr = sendDirFn(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume, nil)
 			} else {
 				fmt.Printf("→ [%s] Connecting (%s) [chunks=%d]...\n", p.Name, p.Addr(), nChunks)
-				sendErr = transfer.Send(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
+				sendErr = sendFileFn(ctx, p.Addr(), target, nChunks, fp, lim, compressed, compLevel, noResume)
 			}
 			results[i] = peerResult{peer: p, err: sendErr, dur: time.Since(start)}
 		}(i, p)
