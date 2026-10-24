@@ -471,10 +471,13 @@ func parseFingerprint(fpHex string) ([]byte, error) {
 	return fp, nil
 }
 
+// browseFn は mDNS 探索の実体。テストで差し替えられるよう変数にしている。
+var browseFn = discovery.Browse
+
 // discoverAndSelect は mDNS でピアを探し、複数いれば対話選択する。
 func discoverAndSelect(ctx context.Context, timeout time.Duration) (discovery.Peer, error) {
 	fmt.Printf("Searching for peers (%.0fs)...\n", timeout.Seconds())
-	peers, err := discovery.Browse(ctx, timeout)
+	peers, err := browseFn(ctx, timeout)
 	if err != nil {
 		return discovery.Peer{}, err
 	}
@@ -519,7 +522,7 @@ var isTerminal = func() bool {
 // discoverAll は timeout 内で全 MeshDrop ピアを発見して返す。
 func discoverAll(ctx context.Context, timeout time.Duration) ([]discovery.Peer, error) {
 	fmt.Printf("Searching for peers (%.0fs)...\n", timeout.Seconds())
-	peers, err := discovery.Browse(ctx, timeout)
+	peers, err := browseFn(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
