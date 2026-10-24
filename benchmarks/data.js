@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792830590723,
+  "lastUpdate": 1792833235534,
   "repoUrl": "https://github.com/flipslidersand-labs/mesh-drop",
   "entries": {
     "Benchmark": [
@@ -218444,6 +218444,1974 @@ window.BENCHMARK_DATA = {
             "value": 26,
             "unit": "allocs/op",
             "extra": "2673 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "yukihanastudy@gmail.com",
+            "name": "flipslidersand",
+            "username": "flipslidersand"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8973e8a9622034fcbbda19a9e2dd0e6ed99b7a5c",
+          "message": "Merge pull request #700 from flipslidersand-labs/staging\n\nmerge-queue: promote staging",
+          "timestamp": "2026-10-24T18:09:27+09:00",
+          "tree_id": "88457140f197eb53d739cdae9ca935a280cbb8f2",
+          "url": "https://github.com/flipslidersand-labs/mesh-drop/commit/8973e8a9622034fcbbda19a9e2dd0e6ed99b7a5c"
+        },
+        "date": 1792833233085,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 2384,
+            "unit": "ns/op\t 429.62 MB/s\t      32 B/op\t       3 allocs/op",
+            "extra": "504156 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 2384,
+            "unit": "ns/op",
+            "extra": "504156 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 429.62,
+            "unit": "MB/s",
+            "extra": "504156 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "504156 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "504156 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 2408,
+            "unit": "ns/op\t 425.30 MB/s\t      32 B/op\t       3 allocs/op",
+            "extra": "493346 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 2408,
+            "unit": "ns/op",
+            "extra": "493346 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 425.3,
+            "unit": "MB/s",
+            "extra": "493346 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "493346 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "493346 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 2363,
+            "unit": "ns/op\t 433.26 MB/s\t      33 B/op\t       3 allocs/op",
+            "extra": "510543 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 2363,
+            "unit": "ns/op",
+            "extra": "510543 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 433.26,
+            "unit": "MB/s",
+            "extra": "510543 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 33,
+            "unit": "B/op",
+            "extra": "510543 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "510543 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 15882,
+            "unit": "ns/op\t1031.59 MB/s\t      34 B/op\t       3 allocs/op",
+            "extra": "74257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 15882,
+            "unit": "ns/op",
+            "extra": "74257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1031.59,
+            "unit": "MB/s",
+            "extra": "74257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 34,
+            "unit": "B/op",
+            "extra": "74257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "74257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 15894,
+            "unit": "ns/op\t1030.82 MB/s\t      32 B/op\t       3 allocs/op",
+            "extra": "76060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 15894,
+            "unit": "ns/op",
+            "extra": "76060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1030.82,
+            "unit": "MB/s",
+            "extra": "76060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "76060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "76060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 15860,
+            "unit": "ns/op\t1033.01 MB/s\t      33 B/op\t       3 allocs/op",
+            "extra": "74301 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 15860,
+            "unit": "ns/op",
+            "extra": "74301 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1033.01,
+            "unit": "MB/s",
+            "extra": "74301 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 33,
+            "unit": "B/op",
+            "extra": "74301 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/16KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "74301 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 55317,
+            "unit": "ns/op\t1184.75 MB/s\t      82 B/op\t       6 allocs/op",
+            "extra": "21830 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 55317,
+            "unit": "ns/op",
+            "extra": "21830 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1184.75,
+            "unit": "MB/s",
+            "extra": "21830 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 82,
+            "unit": "B/op",
+            "extra": "21830 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21830 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 54814,
+            "unit": "ns/op\t1195.60 MB/s\t      73 B/op\t       6 allocs/op",
+            "extra": "21684 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 54814,
+            "unit": "ns/op",
+            "extra": "21684 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1195.6,
+            "unit": "MB/s",
+            "extra": "21684 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 73,
+            "unit": "B/op",
+            "extra": "21684 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21684 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 55166,
+            "unit": "ns/op\t1187.99 MB/s\t      76 B/op\t       6 allocs/op",
+            "extra": "21565 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 55166,
+            "unit": "ns/op",
+            "extra": "21565 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1187.99,
+            "unit": "MB/s",
+            "extra": "21565 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 76,
+            "unit": "B/op",
+            "extra": "21565 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/64KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21565 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 233250,
+            "unit": "ns/op\t1123.87 MB/s\t     224 B/op\t      15 allocs/op",
+            "extra": "5077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 233250,
+            "unit": "ns/op",
+            "extra": "5077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1123.87,
+            "unit": "MB/s",
+            "extra": "5077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 224,
+            "unit": "B/op",
+            "extra": "5077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 15,
+            "unit": "allocs/op",
+            "extra": "5077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 235067,
+            "unit": "ns/op\t1115.19 MB/s\t     224 B/op\t      15 allocs/op",
+            "extra": "5143 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 235067,
+            "unit": "ns/op",
+            "extra": "5143 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1115.19,
+            "unit": "MB/s",
+            "extra": "5143 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 224,
+            "unit": "B/op",
+            "extra": "5143 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 15,
+            "unit": "allocs/op",
+            "extra": "5143 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 233381,
+            "unit": "ns/op\t1123.25 MB/s\t     237 B/op\t      15 allocs/op",
+            "extra": "5102 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 233381,
+            "unit": "ns/op",
+            "extra": "5102 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1123.25,
+            "unit": "MB/s",
+            "extra": "5102 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 237,
+            "unit": "B/op",
+            "extra": "5102 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/256KB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 15,
+            "unit": "allocs/op",
+            "extra": "5102 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 909440,
+            "unit": "ns/op\t1152.99 MB/s\t    1657 B/op\t      51 allocs/op",
+            "extra": "1298 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 909440,
+            "unit": "ns/op",
+            "extra": "1298 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1152.99,
+            "unit": "MB/s",
+            "extra": "1298 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1657,
+            "unit": "B/op",
+            "extra": "1298 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 51,
+            "unit": "allocs/op",
+            "extra": "1298 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 917717,
+            "unit": "ns/op\t1142.59 MB/s\t    1680 B/op\t      51 allocs/op",
+            "extra": "1330 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 917717,
+            "unit": "ns/op",
+            "extra": "1330 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1142.59,
+            "unit": "MB/s",
+            "extra": "1330 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1680,
+            "unit": "B/op",
+            "extra": "1330 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 51,
+            "unit": "allocs/op",
+            "extra": "1330 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 910900,
+            "unit": "ns/op\t1151.14 MB/s\t    1444 B/op\t      51 allocs/op",
+            "extra": "1312 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 910900,
+            "unit": "ns/op",
+            "extra": "1312 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1151.14,
+            "unit": "MB/s",
+            "extra": "1312 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1444,
+            "unit": "B/op",
+            "extra": "1312 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite/1MB (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 51,
+            "unit": "allocs/op",
+            "extra": "1312 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 54940,
+            "unit": "ns/op\t1192.86 MB/s\t      64 B/op\t       6 allocs/op",
+            "extra": "21744 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 54940,
+            "unit": "ns/op",
+            "extra": "21744 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1192.86,
+            "unit": "MB/s",
+            "extra": "21744 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 64,
+            "unit": "B/op",
+            "extra": "21744 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21744 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 55017,
+            "unit": "ns/op\t1191.19 MB/s\t      76 B/op\t       6 allocs/op",
+            "extra": "21823 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 55017,
+            "unit": "ns/op",
+            "extra": "21823 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1191.19,
+            "unit": "MB/s",
+            "extra": "21823 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 76,
+            "unit": "B/op",
+            "extra": "21823 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21823 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 54864,
+            "unit": "ns/op\t1194.51 MB/s\t      73 B/op\t       6 allocs/op",
+            "extra": "21766 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 54864,
+            "unit": "ns/op",
+            "extra": "21766 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - MB/s",
+            "value": 1194.51,
+            "unit": "MB/s",
+            "extra": "21766 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 73,
+            "unit": "B/op",
+            "extra": "21766 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamRead (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "21766 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 966601,
+            "unit": "ns/op\t   26088 B/op\t     321 allocs/op",
+            "extra": "1239 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 966601,
+            "unit": "ns/op",
+            "extra": "1239 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 26088,
+            "unit": "B/op",
+            "extra": "1239 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 321,
+            "unit": "allocs/op",
+            "extra": "1239 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 957144,
+            "unit": "ns/op\t   26066 B/op\t     321 allocs/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 957144,
+            "unit": "ns/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 26066,
+            "unit": "B/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 321,
+            "unit": "allocs/op",
+            "extra": "1192 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 967238,
+            "unit": "ns/op\t   26067 B/op\t     321 allocs/op",
+            "extra": "1237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 967238,
+            "unit": "ns/op",
+            "extra": "1237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 26067,
+            "unit": "B/op",
+            "extra": "1237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseHandshake (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 321,
+            "unit": "allocs/op",
+            "extra": "1237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 1117,
+            "unit": "ns/op\t    1409 B/op\t      19 allocs/op",
+            "extra": "921139 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 1117,
+            "unit": "ns/op",
+            "extra": "921139 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1409,
+            "unit": "B/op",
+            "extra": "921139 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 19,
+            "unit": "allocs/op",
+            "extra": "921139 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 1105,
+            "unit": "ns/op\t    1409 B/op\t      19 allocs/op",
+            "extra": "908679 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 1105,
+            "unit": "ns/op",
+            "extra": "908679 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1409,
+            "unit": "B/op",
+            "extra": "908679 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 19,
+            "unit": "allocs/op",
+            "extra": "908679 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 1113,
+            "unit": "ns/op\t    1409 B/op\t      19 allocs/op",
+            "extra": "951415 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 1113,
+            "unit": "ns/op",
+            "extra": "951415 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 1409,
+            "unit": "B/op",
+            "extra": "951415 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkDeriveChunkStreamKey (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 19,
+            "unit": "allocs/op",
+            "extra": "951415 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 11230,
+            "unit": "ns/op\t      37 B/op\t       3 allocs/op",
+            "extra": "105646 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 11230,
+            "unit": "ns/op",
+            "extra": "105646 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 37,
+            "unit": "B/op",
+            "extra": "105646 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "105646 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 11220,
+            "unit": "ns/op\t      36 B/op\t       3 allocs/op",
+            "extra": "105861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 11220,
+            "unit": "ns/op",
+            "extra": "105861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 36,
+            "unit": "B/op",
+            "extra": "105861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "105861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto)",
+            "value": 11204,
+            "unit": "ns/op\t      36 B/op\t       3 allocs/op",
+            "extra": "105321 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - ns/op",
+            "value": 11204,
+            "unit": "ns/op",
+            "extra": "105321 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - B/op",
+            "value": 36,
+            "unit": "B/op",
+            "extra": "105321 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkNoiseStreamWrite_Parallel (github.com/flipslidersand-labs/mesh-drop/internal/crypto) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "105321 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 42484,
+            "unit": "ns/op\t1542.59 MB/s\t   39600 B/op\t      34 allocs/op",
+            "extra": "27940 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 42484,
+            "unit": "ns/op",
+            "extra": "27940 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 1542.59,
+            "unit": "MB/s",
+            "extra": "27940 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 39600,
+            "unit": "B/op",
+            "extra": "27940 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 34,
+            "unit": "allocs/op",
+            "extra": "27940 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 42524,
+            "unit": "ns/op\t1541.15 MB/s\t   39600 B/op\t      34 allocs/op",
+            "extra": "28117 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 42524,
+            "unit": "ns/op",
+            "extra": "28117 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 1541.15,
+            "unit": "MB/s",
+            "extra": "28117 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 39600,
+            "unit": "B/op",
+            "extra": "28117 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 34,
+            "unit": "allocs/op",
+            "extra": "28117 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 43270,
+            "unit": "ns/op\t1514.60 MB/s\t   39600 B/op\t      34 allocs/op",
+            "extra": "28060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 43270,
+            "unit": "ns/op",
+            "extra": "28060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 1514.6,
+            "unit": "MB/s",
+            "extra": "28060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 39600,
+            "unit": "B/op",
+            "extra": "28060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/64KB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 34,
+            "unit": "allocs/op",
+            "extra": "28060 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 195519,
+            "unit": "ns/op\t5363.03 MB/s\t   48626 B/op\t     175 allocs/op",
+            "extra": "6208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 195519,
+            "unit": "ns/op",
+            "extra": "6208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 5363.03,
+            "unit": "MB/s",
+            "extra": "6208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 48626,
+            "unit": "B/op",
+            "extra": "6208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 175,
+            "unit": "allocs/op",
+            "extra": "6208 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 195083,
+            "unit": "ns/op\t5375.02 MB/s\t   48627 B/op\t     175 allocs/op",
+            "extra": "5737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 195083,
+            "unit": "ns/op",
+            "extra": "5737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 5375.02,
+            "unit": "MB/s",
+            "extra": "5737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 48627,
+            "unit": "B/op",
+            "extra": "5737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 175,
+            "unit": "allocs/op",
+            "extra": "5737 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 194288,
+            "unit": "ns/op\t5397.01 MB/s\t   48628 B/op\t     175 allocs/op",
+            "extra": "6271 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 194288,
+            "unit": "ns/op",
+            "extra": "6271 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 5397.01,
+            "unit": "MB/s",
+            "extra": "6271 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 48628,
+            "unit": "B/op",
+            "extra": "6271 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/1MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 175,
+            "unit": "allocs/op",
+            "extra": "6271 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 2453680,
+            "unit": "ns/op\t6837.57 MB/s\t  179939 B/op\t    2115 allocs/op",
+            "extra": "516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 2453680,
+            "unit": "ns/op",
+            "extra": "516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 6837.57,
+            "unit": "MB/s",
+            "extra": "516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 179939,
+            "unit": "B/op",
+            "extra": "516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 2115,
+            "unit": "allocs/op",
+            "extra": "516 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 2255948,
+            "unit": "ns/op\t7436.88 MB/s\t  179920 B/op\t    2115 allocs/op",
+            "extra": "520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 2255948,
+            "unit": "ns/op",
+            "extra": "520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 7436.88,
+            "unit": "MB/s",
+            "extra": "520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 179920,
+            "unit": "B/op",
+            "extra": "520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 2115,
+            "unit": "allocs/op",
+            "extra": "520 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 2251377,
+            "unit": "ns/op\t7451.98 MB/s\t  179924 B/op\t    2115 allocs/op",
+            "extra": "529 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 2251377,
+            "unit": "ns/op",
+            "extra": "529 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 7451.98,
+            "unit": "MB/s",
+            "extra": "529 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 179924,
+            "unit": "B/op",
+            "extra": "529 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader/16MB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 2115,
+            "unit": "allocs/op",
+            "extra": "529 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 921.8,
+            "unit": "ns/op\t    3384 B/op\t       5 allocs/op",
+            "extra": "1326589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 921.8,
+            "unit": "ns/op",
+            "extra": "1326589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 3384,
+            "unit": "B/op",
+            "extra": "1326589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "1326589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 927.9,
+            "unit": "ns/op\t    3384 B/op\t       5 allocs/op",
+            "extra": "1306922 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 927.9,
+            "unit": "ns/op",
+            "extra": "1306922 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 3384,
+            "unit": "B/op",
+            "extra": "1306922 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "1306922 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 962.3,
+            "unit": "ns/op\t    3384 B/op\t       5 allocs/op",
+            "extra": "1309393 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 962.3,
+            "unit": "ns/op",
+            "extra": "1309393 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 3384,
+            "unit": "B/op",
+            "extra": "1309393 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHashReader_SmallChunks (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "1309393 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 310.1,
+            "unit": "ns/op\t     180 B/op\t       3 allocs/op",
+            "extra": "3874104 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 310.1,
+            "unit": "ns/op",
+            "extra": "3874104 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 180,
+            "unit": "B/op",
+            "extra": "3874104 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "3874104 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 308.6,
+            "unit": "ns/op\t     180 B/op\t       3 allocs/op",
+            "extra": "3884316 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 308.6,
+            "unit": "ns/op",
+            "extra": "3884316 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 180,
+            "unit": "B/op",
+            "extra": "3884316 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "3884316 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 309.6,
+            "unit": "ns/op\t     180 B/op\t       3 allocs/op",
+            "extra": "3838149 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 309.6,
+            "unit": "ns/op",
+            "extra": "3838149 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 180,
+            "unit": "B/op",
+            "extra": "3838149 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "3838149 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1268,
+            "unit": "ns/op\t     504 B/op\t      11 allocs/op",
+            "extra": "868224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1268,
+            "unit": "ns/op",
+            "extra": "868224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 504,
+            "unit": "B/op",
+            "extra": "868224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 11,
+            "unit": "allocs/op",
+            "extra": "868224 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1265,
+            "unit": "ns/op\t     504 B/op\t      11 allocs/op",
+            "extra": "871780 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1265,
+            "unit": "ns/op",
+            "extra": "871780 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 504,
+            "unit": "B/op",
+            "extra": "871780 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 11,
+            "unit": "allocs/op",
+            "extra": "871780 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1269,
+            "unit": "ns/op\t     504 B/op\t      11 allocs/op",
+            "extra": "862527 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1269,
+            "unit": "ns/op",
+            "extra": "862527 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 504,
+            "unit": "B/op",
+            "extra": "862527 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 11,
+            "unit": "allocs/op",
+            "extra": "862527 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1139870,
+            "unit": "ns/op\t  341120 B/op\t    5025 allocs/op",
+            "extra": "1048 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1139870,
+            "unit": "ns/op",
+            "extra": "1048 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 341120,
+            "unit": "B/op",
+            "extra": "1048 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5025,
+            "unit": "allocs/op",
+            "extra": "1048 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1126233,
+            "unit": "ns/op\t  341121 B/op\t    5025 allocs/op",
+            "extra": "1077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1126233,
+            "unit": "ns/op",
+            "extra": "1077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 341121,
+            "unit": "B/op",
+            "extra": "1077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5025,
+            "unit": "allocs/op",
+            "extra": "1077 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 1146725,
+            "unit": "ns/op\t  341121 B/op\t    5025 allocs/op",
+            "extra": "1042 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 1146725,
+            "unit": "ns/op",
+            "extra": "1042 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 341121,
+            "unit": "B/op",
+            "extra": "1042 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkReadMeta_BatchMode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 5025,
+            "unit": "allocs/op",
+            "extra": "1042 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 202.6,
+            "unit": "ns/op\t      84 B/op\t       3 allocs/op",
+            "extra": "5898897 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 202.6,
+            "unit": "ns/op",
+            "extra": "5898897 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 84,
+            "unit": "B/op",
+            "extra": "5898897 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "5898897 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 202.6,
+            "unit": "ns/op\t      84 B/op\t       3 allocs/op",
+            "extra": "5905460 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 202.6,
+            "unit": "ns/op",
+            "extra": "5905460 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 84,
+            "unit": "B/op",
+            "extra": "5905460 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "5905460 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 200.9,
+            "unit": "ns/op\t      84 B/op\t       3 allocs/op",
+            "extra": "5909865 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 200.9,
+            "unit": "ns/op",
+            "extra": "5909865 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 84,
+            "unit": "B/op",
+            "extra": "5909865 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteChunkMeta (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "5909865 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 38.79,
+            "unit": "ns/op\t     128 B/op\t       1 allocs/op",
+            "extra": "31195791 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 38.79,
+            "unit": "ns/op",
+            "extra": "31195791 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 128,
+            "unit": "B/op",
+            "extra": "31195791 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "31195791 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 40.95,
+            "unit": "ns/op\t     128 B/op\t       1 allocs/op",
+            "extra": "30515763 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 40.95,
+            "unit": "ns/op",
+            "extra": "30515763 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 128,
+            "unit": "B/op",
+            "extra": "30515763 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "30515763 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 39.49,
+            "unit": "ns/op\t     128 B/op\t       1 allocs/op",
+            "extra": "32384877 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 39.49,
+            "unit": "ns/op",
+            "extra": "32384877 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 128,
+            "unit": "B/op",
+            "extra": "32384877 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/4chunks_1GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "32384877 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 68.76,
+            "unit": "ns/op\t     256 B/op\t       1 allocs/op",
+            "extra": "17468436 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 68.76,
+            "unit": "ns/op",
+            "extra": "17468436 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 256,
+            "unit": "B/op",
+            "extra": "17468436 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "17468436 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 70.02,
+            "unit": "ns/op\t     256 B/op\t       1 allocs/op",
+            "extra": "17426110 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 70.02,
+            "unit": "ns/op",
+            "extra": "17426110 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 256,
+            "unit": "B/op",
+            "extra": "17426110 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "17426110 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 68.97,
+            "unit": "ns/op\t     256 B/op\t       1 allocs/op",
+            "extra": "17109834 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 68.97,
+            "unit": "ns/op",
+            "extra": "17109834 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 256,
+            "unit": "B/op",
+            "extra": "17109834 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/8chunks_4GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "17109834 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 127.3,
+            "unit": "ns/op\t     512 B/op\t       1 allocs/op",
+            "extra": "9176996 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 127.3,
+            "unit": "ns/op",
+            "extra": "9176996 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 512,
+            "unit": "B/op",
+            "extra": "9176996 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "9176996 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 127.3,
+            "unit": "ns/op\t     512 B/op\t       1 allocs/op",
+            "extra": "9118572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 127.3,
+            "unit": "ns/op",
+            "extra": "9118572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 512,
+            "unit": "B/op",
+            "extra": "9118572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "9118572 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 126.9,
+            "unit": "ns/op\t     512 B/op\t       1 allocs/op",
+            "extra": "9181870 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 126.9,
+            "unit": "ns/op",
+            "extra": "9181870 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 512,
+            "unit": "B/op",
+            "extra": "9181870 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/16chunks_8GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "9181870 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 431.6,
+            "unit": "ns/op\t    2048 B/op\t       1 allocs/op",
+            "extra": "2679890 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 431.6,
+            "unit": "ns/op",
+            "extra": "2679890 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2048,
+            "unit": "B/op",
+            "extra": "2679890 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "2679890 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 436.7,
+            "unit": "ns/op\t    2048 B/op\t       1 allocs/op",
+            "extra": "2753931 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 436.7,
+            "unit": "ns/op",
+            "extra": "2753931 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2048,
+            "unit": "B/op",
+            "extra": "2753931 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "2753931 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 437.4,
+            "unit": "ns/op\t    2048 B/op\t       1 allocs/op",
+            "extra": "2714162 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 437.4,
+            "unit": "ns/op",
+            "extra": "2714162 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2048,
+            "unit": "B/op",
+            "extra": "2714162 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAssignChunks/64chunks_16GB (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "2714162 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 401560,
+            "unit": "ns/op\t  71.40 MB/s\t 2347071 B/op\t      48 allocs/op",
+            "extra": "2716 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 401560,
+            "unit": "ns/op",
+            "extra": "2716 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 71.4,
+            "unit": "MB/s",
+            "extra": "2716 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2347071,
+            "unit": "B/op",
+            "extra": "2716 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 48,
+            "unit": "allocs/op",
+            "extra": "2716 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 379989,
+            "unit": "ns/op\t  75.45 MB/s\t 2347069 B/op\t      48 allocs/op",
+            "extra": "2732 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 379989,
+            "unit": "ns/op",
+            "extra": "2732 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 75.45,
+            "unit": "MB/s",
+            "extra": "2732 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2347069,
+            "unit": "B/op",
+            "extra": "2732 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 48,
+            "unit": "allocs/op",
+            "extra": "2732 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 420476,
+            "unit": "ns/op\t  68.19 MB/s\t 2347067 B/op\t      48 allocs/op",
+            "extra": "3861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 420476,
+            "unit": "ns/op",
+            "extra": "3861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 68.19,
+            "unit": "MB/s",
+            "extra": "3861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2347067,
+            "unit": "B/op",
+            "extra": "3861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkZstdEncode (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 48,
+            "unit": "allocs/op",
+            "extra": "3861 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 348688,
+            "unit": "ns/op\t3007.21 MB/s\t 2228314 B/op\t      25 allocs/op",
+            "extra": "3549 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 348688,
+            "unit": "ns/op",
+            "extra": "3549 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 3007.21,
+            "unit": "MB/s",
+            "extra": "3549 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228314,
+            "unit": "B/op",
+            "extra": "3549 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 25,
+            "unit": "allocs/op",
+            "extra": "3549 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 389909,
+            "unit": "ns/op\t2689.28 MB/s\t 2228291 B/op\t      25 allocs/op",
+            "extra": "3866 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 389909,
+            "unit": "ns/op",
+            "extra": "3866 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 2689.28,
+            "unit": "MB/s",
+            "extra": "3866 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228291,
+            "unit": "B/op",
+            "extra": "3866 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 25,
+            "unit": "allocs/op",
+            "extra": "3866 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 364207,
+            "unit": "ns/op\t2879.07 MB/s\t 2228308 B/op\t      25 allocs/op",
+            "extra": "3656 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 364207,
+            "unit": "ns/op",
+            "extra": "3656 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 2879.07,
+            "unit": "MB/s",
+            "extra": "3656 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228308,
+            "unit": "B/op",
+            "extra": "3656 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_NoLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 25,
+            "unit": "allocs/op",
+            "extra": "3656 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 372747,
+            "unit": "ns/op\t2813.10 MB/s\t 2228363 B/op\t      26 allocs/op",
+            "extra": "3554 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 372747,
+            "unit": "ns/op",
+            "extra": "3554 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 2813.1,
+            "unit": "MB/s",
+            "extra": "3554 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228363,
+            "unit": "B/op",
+            "extra": "3554 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 26,
+            "unit": "allocs/op",
+            "extra": "3554 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 358567,
+            "unit": "ns/op\t2924.35 MB/s\t 2228332 B/op\t      26 allocs/op",
+            "extra": "3979 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 358567,
+            "unit": "ns/op",
+            "extra": "3979 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 2924.35,
+            "unit": "MB/s",
+            "extra": "3979 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228332,
+            "unit": "B/op",
+            "extra": "3979 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 26,
+            "unit": "allocs/op",
+            "extra": "3979 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer)",
+            "value": 359031,
+            "unit": "ns/op\t2920.57 MB/s\t 2228336 B/op\t      26 allocs/op",
+            "extra": "3914 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - ns/op",
+            "value": 359031,
+            "unit": "ns/op",
+            "extra": "3914 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - MB/s",
+            "value": 2920.57,
+            "unit": "MB/s",
+            "extra": "3914 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - B/op",
+            "value": 2228336,
+            "unit": "B/op",
+            "extra": "3914 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkThrottledReader_HighLimit (github.com/flipslidersand-labs/mesh-drop/internal/transfer) - allocs/op",
+            "value": 26,
+            "unit": "allocs/op",
+            "extra": "3914 times\n4 procs"
           }
         ]
       }
