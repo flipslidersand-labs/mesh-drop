@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -599,35 +598,9 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 		}
 	}
 
-	errCh := make(chan error, expectedChunks)
-
-	// #477/#513: 最初のチャンクエラーで QUIC 接続を閉じて、AcceptStream で待機中の
-	// 他の goroutine がブロックし続けるのを防ぐ。sync.Once で二重クローズを回避する。
-	// #513: ctx をキャンセルして AcceptStream が即座にキャンセルエラーで返るようにする。
-	innerCtx, cancelInner := context.WithCancel(ctx)
-	defer cancelInner()
-	var closeOnce sync.Once
-	closeConn := func(cerr error) {
-		closeOnce.Do(func() {
-			cancelInner()
-			conn.CloseWithError(1, cerr.Error()) //nolint:errcheck
-		})
-	}
-
-	var wg sync.WaitGroup
-	for i := 0; i < expectedChunks; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			aerr := acceptDirChunk(innerCtx, conn, handles, bar, peerKey, meta.Compressed)
-			if aerr != nil {
-				closeConn(aerr)
-			}
-			errCh <- aerr
-		}()
-	}
-	wg.Wait()
-	close(errCh)
+	results := runChunkWorkers(ctx, conn, expectedChunks, func(wctx context.Context) error {
+		return acceptDirChunk(wctx, conn, handles, bar, peerKey, meta.Compressed)
+	})
 	fmt.Println()
 
 	for i := range handles {
@@ -640,7 +613,7 @@ func doReceiveDir(ctx context.Context, conn *quic.Conn, meta Meta, outDir string
 	// #275: categorize chunk errors before returning
 	ec := newErrCounter()
 	var firstErr error
-	for e := range errCh {
+	for _, e := range results {
 		ec.Add(e)
 		if e != nil && firstErr == nil {
 			firstErr = e
