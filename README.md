@@ -116,6 +116,28 @@ meshdrop receive --relay http://your-server:8080
 meshdrop send --relay http://your-server:8080 --code XXXXXXXX ./file.zip
 ```
 
+### Web UI (drag & drop)
+
+```bash
+meshdrop ui                         # http://127.0.0.1:8765 and opens your browser
+meshdrop ui --port 9000 --no-open   # different port, don't open the browser
+meshdrop ui --auth-token SECRET     # require "Authorization: Bearer SECRET"
+```
+
+The UI listens on `127.0.0.1` only. It lists peers on the LAN, sends files or folders by drag & drop,
+and receives incoming transfers (download them from the page).
+`--auth-token` can also be set in `config.yaml`; `--discover` sets the per-poll peer discovery timeout.
+
+### Config and diagnostics
+
+```bash
+meshdrop config init   # create a commented ~/.meshdrop/config.yaml
+meshdrop config path   # print the config file path
+meshdrop info          # show your external IP via STUN (--stun to pick a server)
+```
+
+Command-line flags take precedence over `config.yaml`.
+
 ## Architecture
 
 ```

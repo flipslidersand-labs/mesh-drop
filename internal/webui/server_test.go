@@ -757,3 +757,27 @@ func TestLocalOriginGuard(t *testing.T) {
 		}
 	}
 }
+
+// peer 名・ファイル名・エラー文言などの相手由来データを HTML として挿入する API を
+// 静的アセットに持ち込まないことを固定する (#589)。DOM は createElement/textContent で組み立てる。
+func TestStaticAssets_NoHTMLInjectionSinks(t *testing.T) {
+	forbidden := []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"}
+	entries, err := staticFiles.ReadDir("static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".js") {
+			continue
+		}
+		b, err := staticFiles.ReadFile("static/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range forbidden {
+			if strings.Contains(string(b), f) {
+				t.Errorf("static/%s uses %s: peer-supplied data must be inserted via textContent/DOM APIs (#589)", e.Name(), f)
+			}
+		}
+	}
+}
