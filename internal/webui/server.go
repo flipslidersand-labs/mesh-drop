@@ -48,6 +48,10 @@ type rateLimiter struct {
 // idleTimeout is how long an IP must be silent before its limiter is evicted.
 const idleTimeout = 5 * time.Minute
 
+// evictInterval is how often the background goroutine scans for idle IPs.
+// var にしているのはテストで短縮するため (#633)。
+var evictInterval = time.Minute
+
 // newRateLimiter creates a rateLimiter and starts the background eviction
 // goroutine.  The goroutine stops when ctx is cancelled, preventing goroutine
 // leaks after the Server is shut down.
@@ -56,7 +60,7 @@ func newRateLimiter(ctx context.Context) *rateLimiter {
 		visitors: make(map[string]*rate.Limiter),
 		lastSeen: make(map[string]time.Time),
 	}
-	go rl.evict(ctx)
+	go rl.evict(ctx, evictInterval) // 起動時に値を読み、goroutine 側でパッケージ変数を読まない
 	return rl
 }
 
@@ -79,22 +83,27 @@ func (rl *rateLimiter) getVisitor(ip string) *rate.Limiter {
 // idleTimeout.  This preserves the token-bucket state of active IPs so that
 // rate limiting is not inadvertently reset.  The goroutine exits when ctx is
 // cancelled, eliminating the goroutine leak that existed previously.
-func (rl *rateLimiter) evict(ctx context.Context) {
-	t := time.NewTicker(time.Minute)
+func (rl *rateLimiter) evict(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			rl.mu.Lock()
-			for ip, ts := range rl.lastSeen {
-				if now.Sub(ts) > idleTimeout {
-					delete(rl.visitors, ip)
-					delete(rl.lastSeen, ip)
-				}
-			}
-			rl.mu.Unlock()
+			rl.evictOnce(now)
+		}
+	}
+}
+
+// evictOnce removes entries whose lastSeen is older than idleTimeout relative to now.
+func (rl *rateLimiter) evictOnce(now time.Time) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for ip, ts := range rl.lastSeen {
+		if now.Sub(ts) > idleTimeout {
+			delete(rl.visitors, ip)
+			delete(rl.lastSeen, ip)
 		}
 	}
 }
