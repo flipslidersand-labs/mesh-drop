@@ -2,7 +2,7 @@
 
 ## Dev setup
 
-**Requirements:** Go 1.25+
+**Requirements:** Go 1.26+
 
 ```bash
 git clone https://github.com/flipslidersand-labs/mesh-drop.git

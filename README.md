@@ -36,7 +36,7 @@ curl -L https://github.com/flipslidersand-labs/mesh-drop/releases/latest/downloa
   -o meshdrop && chmod +x meshdrop && sudo mv meshdrop /usr/local/bin/
 ```
 
-**Build from source** (requires Go 1.25+):
+**Build from source** (requires Go 1.26+):
 
 ```bash
 go install github.com/flipslidersand-labs/mesh-drop/cmd/meshdrop@latest
