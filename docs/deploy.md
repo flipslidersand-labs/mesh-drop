@@ -10,7 +10,7 @@ sees file content.
 
 - A publicly accessible Linux server (VPS, VM, bare-metal)
 - Port 8080 (or your chosen port) open in the firewall
-- Docker or Go 1.21+ installed
+- Docker or Go 1.26+ installed
 
 ---
 
