@@ -130,3 +130,36 @@ func TestCheckDirDone_IgnoresSymlinks(t *testing.T) {
 		t.Errorf("checkDirDone = %v, want only [ok.txt] (symlinked files must not be reported)", done)
 	}
 }
+
+// checkDirDone が ".." を含む fm.Path で受信ディレクトリ外の通常ファイルをハッシュして
+// 「完了済み」と報告しないことの回帰テスト (#616)。ピアが既知ハッシュで任意パスの内容を探れた。
+func TestCheckDirDone_IgnoresPathTraversal(t *testing.T) {
+	base := t.TempDir()
+	secret := []byte("secret outside receive dir")
+	if err := os.WriteFile(filepath.Join(base, "secret.txt"), secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := hashReader(bytes.NewReader(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(base, "recv")
+	if err := os.Mkdir(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := []byte("regular file")
+	if err := os.WriteFile(filepath.Join(outDir, "ok.txt"), inside, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hIn, _ := hashReader(bytes.NewReader(inside))
+
+	done := checkDirDone(outDir, []FileMeta{
+		{Path: "../secret.txt", Size: int64(len(secret)), Hash: h},
+		{Path: "sub/../../secret.txt", Size: int64(len(secret)), Hash: h},
+		{Path: filepath.Join(base, "secret.txt"), Size: int64(len(secret)), Hash: h},
+		{Path: "ok.txt", Size: int64(len(inside)), Hash: hIn},
+	})
+	if len(done) != 1 || done[0] != "ok.txt" {
+		t.Errorf("checkDirDone = %v, want only [ok.txt] (out-of-tree paths must not be reported)", done)
+	}
+}
