@@ -34,9 +34,7 @@ func cmdUI() *cobra.Command {
 				return err
 			}
 			// config.yaml から未指定フラグを補完する
-			if !cmd.Flags().Changed("port") && globalCfg.Port != 0 {
-				port = globalCfg.Port
-			}
+			applyDefault(cmd, "port", &port, globalCfg.Port)
 			if port < 1 || port > 65535 {
 				return fmt.Errorf("--port must be between 1 and 65535, got %d", port)
 			}
