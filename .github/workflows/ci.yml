@@ -86,4 +86,4 @@ jobs:
   gitleaks:
     permissions:
       contents: read
-    uses: flipslidersand-labs/qa-workflows/.github/workflows/gitleaks.yml@main
+    uses: flipslidersand-labs/qa-workflows/.github/workflows/gitleaks.yml@b6bd09b2c8c2b1396d5f72f50875a917d7ef66f8
