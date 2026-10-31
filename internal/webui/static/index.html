@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MeshDrop</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<h1>MeshDrop</h1>
+<p class="sub">P2P encrypted file transfer</p>
+
+<div class="card">
+  <h2>File</h2>
+  <div class="mode-toggle">
+    <button id="mode-file" class="mode-btn active">File</button>
+    <button id="mode-dir" class="mode-btn">Directory</button>
+  </div>
+  <div id="drop-zone">
+    <strong id="drop-label">Drop file here</strong>
+    <p>or click to browse</p>
+  </div>
+  <input type="file" id="file-input">
+  <input type="file" id="dir-input" class="hidden" webkitdirectory>
+  <div class="selected-file" id="selected-name"></div>
+</div>
+
+<div class="card">
+  <h2>Peer <span id="refresh-hint" class="hint">(refreshing…)</span></h2>
+  <div class="peers" id="peers"><div class="empty">Searching…</div></div>
+</div>
+
+<div class="card">
+  <button id="send-btn" disabled>Send</button>
+
+  <div class="progress-wrap hidden" id="progress-wrap">
+    <progress id="progress-bar" value="0" max="100"></progress>
+    <div class="progress-label" id="progress-label">0%</div>
+  </div>
+
+  <details>
+    <summary>Advanced settings</summary>
+    <div class="settings-grid">
+      <label class="check-row">
+        <input type="checkbox" id="opt-compress">
+        <span>Compress (zstd)</span>
+      </label>
+      <label>
+        Level (1–9, 0=default)
+        <input type="number" id="opt-level" min="0" max="9" value="0" class="level-input">
+      </label>
+      <label class="full-row">
+        Rate limit (e.g. 10MB/s — empty = unlimited)
+        <input type="text" id="opt-rate" placeholder="unlimited">
+      </label>
+    </div>
+  </details>
+</div>
+
+<div class="card hidden" id="log-card">
+  <h2>Activity</h2>
+  <div class="events" id="events"></div>
+</div>
+
+</body>
+</html>

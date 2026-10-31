@@ -1,0 +1,577 @@
+//go:build !integration
+
+package transfer
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/flipslidersand-labs/mesh-drop/internal/crypto"
+)
+
+// #572: defaultSession（パッケージスコープの共有グローバル）を使う Send/Listen 系関数は、
+// t.Parallel() を使う通常テストと素朴には共存できない（永続 identity が無いと handshake
+// ごとに ephemeral 鍵が変わり "peer key mismatch" になる一方、複数テストから並行に
+// defaultSession.identity へ書き込むと data race になる）。
+//
+// TestMain で全テスト実行前に一度だけ固定 identity を注入すれば、以降は
+// localKey() 経由の読み取りのみになり race は発生しない
+// （internal/transfer/integration_test.go の TestMain と同じパターン）。
+// ListenContinuous は明示的な outDir を取るため CWD 依存も無く、既存の
+// t.Parallel() テストと安全に共存できる。
+func TestMain(m *testing.M) {
+	key, err := crypto.GenerateKeypair()
+	if err != nil {
+		panic("roundtrip: GenerateKeypair: " + err.Error())
+	}
+	defaultSession.mu.Lock()
+	defaultSession.identity = key
+	defaultSession.inited = true
+	defaultSession.mu.Unlock()
+	os.Exit(m.Run())
+}
+
+func rtFreeUDPPort(t *testing.T) int {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freeUDPPort: %v", err)
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	conn.Close() //nolint:errcheck
+	return port
+}
+
+func rtWaitUDPReady(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("udp4", addr, 5*time.Millisecond)
+		if err == nil {
+			conn.Close() //nolint:errcheck
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("waitUDPReady: %s not reachable within %s", addr, timeout)
+}
+
+// rtStartListener starts a ListenContinuous server on a free port and returns
+// the bundle, its address, a cancel func, and a channel of received file paths.
+func rtStartListener(t *testing.T, outDir string) (*TLSBundle, string, context.CancelFunc, chan string) {
+	t.Helper()
+	bundle, err := NewTLSBundle()
+	if err != nil {
+		t.Fatalf("NewTLSBundle: %v", err)
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", rtFreeUDPPort(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	recv := make(chan string, 4)
+	go func() {
+		_ = ListenContinuous(ctx, addr, bundle, outDir, func(_, path string, _ int64, _ string) {
+			recv <- path
+		})
+	}()
+	rtWaitUDPReady(t, addr, 5*time.Second)
+	return bundle, addr, cancel, recv
+}
+
+// rtSkipShort skips the real QUIC-over-UDP round-trip tests when -short is
+// passed. windows-ci already runs with -short for exactly this purpose
+// (see .github/workflows/ci.yml): quic-go's Windows UDP transport crashes
+// with an access violation (Exception 0xc0000005) when a ListenContinuous
+// goroutine's UDP conn is torn down via context cancellation — a pre-existing
+// platform instability that integration_test.go's build tag has always kept
+// off windows-ci (that job runs on ubuntu-latest only). These tests exercise
+// the same real network path outside the integration tag for #572 coverage,
+// so they inherit the same Windows exclusion via -short rather than a
+// growing -skip list in the workflow YAML.
+func rtSkipShort(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping real QUIC round trip in -short mode (Windows quic-go UDP transport instability, #572)")
+	}
+}
+
+func rtWaitRecv(t *testing.T, recv chan string, n int) []string {
+	t.Helper()
+	var paths []string
+	deadline := time.After(20 * time.Second)
+	for i := 0; i < n; i++ {
+		select {
+		case p := <-recv:
+			paths = append(paths, p)
+		case <-deadline:
+			t.Fatalf("timed out waiting for receive (%d/%d)", i, n)
+		}
+	}
+	return paths
+}
+
+// TestRoundTrip_SingleFile exercises the Send / dispatchConnToDir / acceptMetaDispatch /
+// receiveFileToPath / doReceiveFileResume / sendChunk / acceptChunk(WithMeta) / sendMeta(GetResume)
+// path end-to-end, none of which is covered by non-integration tests today (#572).
+func TestRoundTrip_SingleFile(t *testing.T) {
+	rtSkipShort(t)
+	content := make([]byte, 200*1024) // 2 chunks worth, no resume in play
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "hello.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := t.TempDir()
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+	if err := Send(ctx, addr, srcPath, 2, bundle.Fingerprint, nil, false, 0, false); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	paths := rtWaitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("content mismatch: sent %d bytes, got %d bytes", len(content), len(got))
+	}
+	if filepath.Dir(paths[0]) != outDir {
+		t.Errorf("received into %q, want under outDir %q", paths[0], outDir)
+	}
+}
+
+// TestRoundTrip_SingleFile_MoreChunksThanBytes は 5 bytes / n=4 のように
+// ceil(size/n) 分割で末尾チャンクが負サイズになるケースの回帰テスト (#644)。
+func TestRoundTrip_SingleFile_MoreChunksThanBytes(t *testing.T) {
+	rtSkipShort(t)
+	for _, tc := range []struct {
+		size    int
+		nChunks int
+	}{{5, 4}, {1, 4}, {10, 7}} {
+		content := make([]byte, tc.size)
+		if _, err := rand.Read(content); err != nil {
+			t.Fatal(err)
+		}
+		srcPath := filepath.Join(t.TempDir(), "small.bin")
+		if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		outDir := t.TempDir()
+		bundle, addr, cancel, recv := rtStartListener(t, outDir)
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := Send(ctx, addr, srcPath, tc.nChunks, bundle.Fingerprint, nil, false, 0, false); err != nil {
+			t.Fatalf("size=%d n=%d: Send: %v", tc.size, tc.nChunks, err)
+		}
+		paths := rtWaitRecv(t, recv, 1)
+		got, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("size=%d n=%d: content mismatch", tc.size, tc.nChunks)
+		}
+		sndCancel()
+		cancel()
+	}
+}
+
+// TestRoundTrip_Dir exercises SendDir / doSendDir / sendDirChunk / acceptDirChunk / doReceiveDir.
+func TestRoundTrip_Dir(t *testing.T) {
+	rtSkipShort(t)
+	rtSendDirAndCheck(t, map[string][]byte{
+		"a.txt":        []byte("hello from a"),
+		"nested/b.txt": []byte("hello from nested b"),
+	}, 4)
+}
+
+// TestRoundTrip_Dir_WithEmptyFile は空ファイルを含むディレクトリ送信の回帰テスト (#644)。
+// 送信側 len(assignments) と受信側 assignChunks(meta.Files, meta.Chunks) の件数が
+// 食い違い、1チャンクが未受信のままハッシュ不一致になっていた。
+func TestRoundTrip_Dir_WithEmptyFile(t *testing.T) {
+	rtSkipShort(t)
+	rtSendDirAndCheck(t, map[string][]byte{
+		".gitkeep":        {},
+		"data.bin":        bytes.Repeat([]byte("x"), 100),
+		"pkg/__init__.py": {},
+	}, 4)
+}
+
+func rtSendDirAndCheck(t *testing.T, files map[string][]byte, nChunks int) {
+	t.Helper()
+	srcDir := t.TempDir()
+	for name, data := range files {
+		full := filepath.Join(srcDir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outDir := t.TempDir()
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+	if err := SendDir(ctx, addr, srcDir, nChunks, bundle.Fingerprint, nil, false, 0, false, nil); err != nil {
+		t.Fatalf("SendDir: %v", err)
+	}
+
+	// dispatchConnToDir's RecvCallback is only invoked for the single-file
+	// branch (doReceiveDir does not take a callback), so poll for the
+	// receiver's atomic renames to land instead of waiting on recv.
+	_ = recv
+	for name, want := range files {
+		path := filepath.Join(outDir, name)
+		var got []byte
+		var readErr error
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			got, readErr = os.ReadFile(path)
+			if readErr == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s): %v", name, readErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s: content mismatch", name)
+		}
+	}
+}
+
+// TestRoundTrip_Pipe exercises SendPipe / doSendPipe / doReceivePipeConn end-to-end
+// by redirecting os.Stdin to a pipe carrying the test payload.
+func TestRoundTrip_Pipe(t *testing.T) {
+	rtSkipShort(t)
+	payload := []byte("piped data for #572 coverage\n")
+
+	origStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = origStdin })
+
+	go func() {
+		_, _ = w.Write(payload)
+		_ = w.Close()
+	}()
+
+	outDir := t.TempDir()
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+	if err := SendPipe(ctx, addr, bundle.Fingerprint); err != nil {
+		t.Fatalf("SendPipe: %v", err)
+	}
+
+	// ListenContinuous's pipe branch has no callback, so wait on the receive
+	// path indirectly via the sender's own success and a short settle delay:
+	// doReceivePipeConn writes straight to os.Stdout, so we only assert that
+	// SendPipe completed without error (the receive side is exercised for
+	// coverage purposes; content is verified separately by the CLI's own
+	// pipe integration test).
+	select {
+	case <-recv:
+		t.Fatal("unexpected callback invocation for pipe transfer")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestInitSession_Wrapper covers the InitSession() package-level wrapper.
+// defaultSession is already initialized by TestMain, so init() short-circuits
+// on the inited flag without touching s.identity — safe alongside the
+// parallel round-trip tests above.
+func TestInitSession_Wrapper(t *testing.T) {
+	if err := InitSession(); err != nil {
+		t.Errorf("InitSession: %v", err)
+	}
+}
+
+// TestSession_Init_FreshLoadsOrCreatesIdentity covers Session.init()'s actual
+// load-or-create branch using a private Session value (never defaultSession),
+// so it is safe to run alongside the other tests in this file.
+func TestSession_Init_FreshLoadsOrCreatesIdentity(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var s Session
+	if err := s.init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !s.inited {
+		t.Error("expected inited=true after init()")
+	}
+	key1, err := s.localKey()
+	if err != nil {
+		t.Fatalf("localKey: %v", err)
+	}
+
+	// A second Session pointed at the same config dir should load the same
+	// persisted identity rather than generating a fresh one.
+	var s2 Session
+	if err := s2.init(); err != nil {
+		t.Fatalf("init (reload): %v", err)
+	}
+	key2, err := s2.localKey()
+	if err != nil {
+		t.Fatalf("localKey (reload): %v", err)
+	}
+	if !bytes.Equal(key1.Private, key2.Private) {
+		t.Error("expected persisted identity to be reused across Session instances")
+	}
+
+	// init() is idempotent.
+	if err := s.init(); err != nil {
+		t.Fatalf("init (repeat): %v", err)
+	}
+}
+
+// TestRoundTrip_ReceiverFailureReported は受信側の失敗（ここでは最終パスへの rename 失敗）が
+// 送信側にエラーとして伝わることの回帰テスト (#644)。従来は受信側が常に code 0 "done" で
+// close していたため送信側は "✓ Sent" を返していた。
+func TestRoundTrip_ReceiverFailureReported(t *testing.T) {
+	rtSkipShort(t)
+	blockRename := func(t *testing.T, _ string) {
+		t.Helper()
+		rtFailFinalRename(t)
+	}
+
+	t.Run("file", func(t *testing.T) {
+		srcPath := filepath.Join(t.TempDir(), "hello.bin")
+		if err := os.WriteFile(srcPath, []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outDir := t.TempDir()
+		blockRename(t, filepath.Join(outDir, "hello.bin"))
+		bundle, addr, cancel, _ := rtStartListener(t, outDir)
+		defer cancel()
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sndCancel()
+		err := Send(ctx, addr, srcPath, 2, bundle.Fingerprint, nil, false, 0, false)
+		if err == nil || !strings.Contains(err.Error(), "receiver failed") {
+			t.Fatalf("Send error = %v, want receiver failure", err)
+		}
+	})
+
+	t.Run("dir", func(t *testing.T) {
+		srcDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outDir := t.TempDir()
+		blockRename(t, filepath.Join(outDir, "a.txt"))
+		bundle, addr, cancel, _ := rtStartListener(t, outDir)
+		defer cancel()
+
+		ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sndCancel()
+		err := SendDir(ctx, addr, srcDir, 2, bundle.Fingerprint, nil, false, 0, false, nil)
+		if err == nil || !strings.Contains(err.Error(), "receiver failed") {
+			t.Fatalf("SendDir error = %v, want receiver failure", err)
+		}
+	})
+}
+
+// TestRoundTrip_PipeContent は pipe 送信で末尾データが欠落しないことの回帰テスト (#644)。
+// 従来は io.Copy 完了直後に CloseWithError が走り、未達のストリームデータが破棄され得た。
+func TestRoundTrip_PipeContent(t *testing.T) {
+	rtSkipShort(t)
+	payload := make([]byte, 4<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	origStdin, origStdout := os.Stdin, os.Stdout
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin, os.Stdout = inR, outW
+	t.Cleanup(func() { os.Stdin, os.Stdout = origStdin, origStdout })
+
+	go func() {
+		_, _ = inW.Write(payload)
+		_ = inW.Close()
+	}()
+	gotCh := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(outR)
+		gotCh <- b
+	}()
+
+	bundle, addr, cancel, _ := rtStartListener(t, t.TempDir())
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+	sendErr := SendPipe(ctx, addr, bundle.Fingerprint)
+	// SendPipe は受信側の close（= stdout 書き込み完了後）を待ってから返る。
+	os.Stdout = origStdout
+	_ = outW.Close()
+	got := <-gotCh
+	if sendErr != nil {
+		t.Fatalf("SendPipe: %v", sendErr)
+	}
+	if !bytes.Contains(got, payload) {
+		t.Fatalf("pipe output truncated/corrupted: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// TestRoundTrip_ResumeAfterReceiverError は受信途中のエラー後も一時ファイルと
+// チェックポイントが残り、再送で resume して完了することの回帰テスト (#644)。
+// 以前は全エラーで両方を削除していたため resume はハードクラッシュ時しか効かなかった。
+// 中断は最終パスへの rename 失敗で決定論的に起こす（全チャンク受信・ハッシュ一致済み）。
+func TestRoundTrip_ResumeAfterReceiverError(t *testing.T) {
+	rtSkipShort(t)
+	content := make([]byte, 256*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(t.TempDir(), "resume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	outPath := filepath.Join(outDir, "resume.bin")
+	// 1回目の最終 rename を失敗させる。
+	restoreRename := rtFailFinalRename(t)
+
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer sndCancel()
+
+	// 1回目: 受信側は rename で失敗する（送信側への失敗通知は #649 の範囲）。
+	_ = Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false)
+
+	// 受信側の後始末（defer）完了を待ってから部分ファイルの残存を確認する。
+	statePath := checkpointPath(outPath)
+	tmpPath := outPath + ".meshdrop.tmp"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, errS := os.Stat(statePath)
+		_, errT := os.Stat(tmpPath)
+		if errS == nil && errT == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("partial state not kept after receiver error: state=%v tmp=%v", errS, errT)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2回目: 障害を取り除いて再送 → 全チャンク skip の resume で完了する。
+	restoreRename()
+	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false); err != nil {
+		t.Fatalf("resumed Send: %v", err)
+	}
+	paths := rtWaitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("content mismatch after resume")
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Errorf("checkpoint should be removed after success, stat err=%v", err)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("tmp file should be gone after success, stat err=%v", err)
+	}
+}
+
+// TestRoundTrip_NoResumeIgnoresReceiverCheckpoint は、受信側に完了済みチェックポイントが
+// 残っていても --no-resume の再送が全チャンクを送り直して完了することの回帰テスト (#587)。
+// 以前はシングルファイルで Meta.NoResume が受信側に伝わらず、送信側は全チャンクを送るのに
+// 受信側は未完了分しか待たず、ハッシュ不一致かハングになっていた。
+func TestRoundTrip_NoResumeIgnoresReceiverCheckpoint(t *testing.T) {
+	rtSkipShort(t)
+	content := make([]byte, 256*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(t.TempDir(), "noresume.bin")
+	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	outPath := filepath.Join(outDir, "noresume.bin")
+	restoreRename := rtFailFinalRename(t)
+
+	bundle, addr, cancel, recv := rtStartListener(t, outDir)
+	defer cancel()
+	ctx, sndCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer sndCancel()
+
+	// 1回目: 最終 rename を失敗させ、全チャンク完了のチェックポイントと tmp を残す。
+	_ = Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, false)
+	statePath := checkpointPath(outPath)
+	tmpPath := outPath + ".meshdrop.tmp"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, errS := os.Stat(statePath)
+		_, errT := os.Stat(tmpPath)
+		if errS == nil && errT == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("partial state not kept after receiver error: state=%v tmp=%v", errS, errT)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2回目: 障害を除いて --no-resume で再送 → 受信側のチェックポイントを無視して完了する。
+	restoreRename()
+	if err := Send(ctx, addr, srcPath, 4, bundle.Fingerprint, nil, false, 0, true); err != nil {
+		t.Fatalf("Send with noResume: %v", err)
+	}
+	paths := rtWaitRecv(t, recv, 1)
+	got, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("content mismatch after --no-resume resend")
+	}
+}
+
+// rtFailFinalRename は受信側の最終 rename を失敗させ、元に戻す関数を返す（t.Cleanup でも復元）。
+func rtFailFinalRename(t *testing.T) (restore func()) {
+	t.Helper()
+	fail := func(_, _ string) error { return errors.New("injected rename failure") }
+	renameFinalHook.Store(&fail)
+	restore = func() { renameFinalHook.Store(nil) }
+	t.Cleanup(restore)
+	return restore
+}

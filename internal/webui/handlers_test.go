@@ -1,0 +1,431 @@
+package webui
+
+import (
+	"bytes"
+	"context"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// --- #295: handleDownload ---
+
+// TestHandleDownload_MethodNotAllowed verifies that POST/PUT/DELETE are rejected (#485).
+func TestHandleDownload_MethodNotAllowed(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.dlMu.Lock()
+	s.downloads["mid"] = path
+	s.dlMu.Unlock()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req := httptest.NewRequest(method, "/api/downloads/mid", nil)
+		rr := httptest.NewRecorder()
+		s.handleDownload(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("method %s: expected 405, got %d", method, rr.Code)
+		}
+	}
+}
+
+func TestHandleDownload_NotFound(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/nonexistent", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestHandleDownload_ServesFile(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	// Write a temp file to serve.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hello.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s.dlMu.Lock()
+	s.downloads["test-id"] = path
+	s.dlMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/test-id", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); body != "hello" {
+		t.Fatalf("expected body 'hello', got %q", body)
+	}
+}
+
+func TestHandleDownload_ContentDisposition(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report 2026.pdf")
+	if err := os.WriteFile(path, []byte("pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.dlMu.Lock()
+	s.downloads["pdf-id"] = path
+	s.dlMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/pdf-id", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+
+	cd := rr.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, "attachment") {
+		t.Fatalf("expected attachment Content-Disposition, got %q", cd)
+	}
+}
+
+func TestHandleDownload_FileNotOnDisk(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	s.dlMu.Lock()
+	s.downloads["gone"] = "/nonexistent/path/file.txt"
+	s.dlMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/gone", nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+	// http.ServeFile returns 404 for missing files.
+	if rr.Code == http.StatusOK {
+		t.Fatalf("expected non-200 for missing file on disk, got 200")
+	}
+}
+
+// --- #298: handleSendDir ---
+
+func buildSendDirRequest(t *testing.T, peer string, files map[string]string, paths []string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("peer", peer)
+	if paths != nil {
+		pathsJSON := `[`
+		for i, p := range paths {
+			if i > 0 {
+				pathsJSON += ","
+			}
+			pathsJSON += `"` + p + `"`
+		}
+		pathsJSON += `]`
+		_ = w.WriteField("paths", pathsJSON)
+	}
+	for _, name := range paths {
+		content := "content"
+		if c, ok := files[name]; ok {
+			content = c
+		}
+		part, err := w.CreateFormFile("files", filepath.Base(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = part.Write([]byte(content))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/send-dir", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	return req
+}
+
+func TestHandleSendDir_MethodNotAllowed(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/send-dir", nil)
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_MissingPeer(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := buildSendDirRequest(t, "", nil, []string{"dir/file.txt"})
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing peer, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_MissingFiles(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("peer", "127.0.0.1:9999")
+	_ = w.WriteField("paths", "[]")
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/send-dir", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing files, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_InvalidPathsJSON(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("peer", "127.0.0.1:9999")
+	_ = w.WriteField("paths", `not-valid-json`)
+	part, _ := w.CreateFormFile("files", "f.txt")
+	_, _ = part.Write([]byte("x"))
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/send-dir", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid paths JSON, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_PathTraversalRejected(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := buildSendDirRequest(t, "127.0.0.1:9999", nil, []string{"../evil/hack.txt"})
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for path traversal, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_AbsolutePathRejected(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := buildSendDirRequest(t, "127.0.0.1:9999", nil, []string{"/etc/passwd"})
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for absolute path, got %d", rr.Code)
+	}
+}
+
+func TestHandleSendDir_ValidRequest_Returns200(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	req := buildSendDirRequest(t, "127.0.0.1:9999",
+		map[string]string{"mydir/a.txt": "hello"},
+		[]string{"mydir/a.txt"})
+	rr := httptest.NewRecorder()
+	s.handleSendDir(rr, req)
+	// Transfer will fail (no listener) but the HTTP handler should return 200
+	// and the goroutine handles the error asynchronously.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- #300: runReceiver / download registration ---
+
+// TestDownloadRegistration verifies the callback-based registration that runReceiver
+// uses: after a file is received, it must appear in s.downloads and be servable.
+func TestDownloadRegistration(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	// Simulate the receive callback used by runReceiver.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "recv.txt")
+	if err := os.WriteFile(path, []byte("received content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := "recv-test-001"
+
+	// Register exactly as runReceiver's callback does.
+	s.dlMu.Lock()
+	s.downloads[id] = path
+	s.dlMu.Unlock()
+
+	s.hub.publish(ProgressEvent{
+		ID: id, Direction: "recv",
+		File: "recv.txt", Peer: "127.0.0.1:12345",
+		Sent: 16, Total: 16, Done: true,
+	})
+
+	// Verify the file is servable via handleDownload.
+	req := httptest.NewRequest(http.MethodGet, "/api/downloads/"+id, nil)
+	rr := httptest.NewRecorder()
+	s.handleDownload(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after download registration, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); body != "received content" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}
+
+func TestDownloadRegistration_ProgressEventPublished(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	ch := s.hub.subscribe()
+	defer s.hub.unsubscribe(ch)
+
+	// Simulate runReceiver callback publishing an event.
+	s.hub.publish(ProgressEvent{
+		ID: "r1", Direction: "recv",
+		File: "img.png", Peer: "10.0.0.1:7777",
+		Sent: 100, Total: 100, Done: true,
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Direction != "recv" || ev.File != "img.png" || !ev.Done {
+			t.Errorf("unexpected event: %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout: no progress event received")
+	}
+}
+
+func TestRunReceiver_HistoryEntry(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+
+	// Simulate the history append that runReceiver's callback does.
+	s.histMu.Lock()
+	s.history = append(s.history, HistoryEntry{
+		ID: "r2", Direction: "recv",
+		File: "doc.pdf", Peer: "192.168.1.2:7777",
+		Size: 512, At: time.Now(),
+	})
+	s.histMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	rr := httptest.NewRecorder()
+	s.handleHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "doc.pdf") {
+		t.Errorf("history response does not contain expected file: %s", rr.Body.String())
+	}
+}
+
+// TestHandleDownload_ConcurrentGET verifies that concurrent GETs for the same id
+// are serialized by claiming the entry atomically (#634): exactly one request
+// receives the full body, the others get a clean 404 (never a partial/5xx result).
+func TestHandleDownload_ConcurrentGET(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.bin")
+	body := bytes.Repeat([]byte("x"), 1<<20)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.dlMu.Lock()
+	s.downloads["race-id"] = path
+	s.dlMu.Unlock()
+
+	const n = 16
+	codes := make([]int, n)
+	lens := make([]int, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodGet, "/api/downloads/race-id", nil)
+			rr := httptest.NewRecorder()
+			s.handleDownload(rr, req)
+			codes[i], lens[i] = rr.Code, rr.Body.Len()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	ok := 0
+	for i := range codes {
+		switch codes[i] {
+		case http.StatusOK:
+			ok++
+			if lens[i] != len(body) {
+				t.Errorf("req %d: 200 with truncated body %d/%d", i, lens[i], len(body))
+			}
+		case http.StatusNotFound:
+		default:
+			t.Errorf("req %d: unexpected status %d", i, codes[i])
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("expected exactly one 200, got %d (codes=%v)", ok, codes)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file should be removed after download, stat err=%v", err)
+	}
+}
+
+// TestEvictDownloads_RemovesExpiredOnly は TTL 超過の未取得ファイルだけが
+// ディスクと downloads から削除されることを確認する (#586)。
+func TestEvictDownloads_RemovesExpiredOnly(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	dir := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old, fresh, untracked := mk("old"), mk("fresh"), mk("untracked")
+	now := time.Now()
+	s.dlMu.Lock()
+	s.downloads["old"], s.dlAt["old"] = old, now.Add(-(downloadTTL + time.Minute))
+	s.downloads["fresh"], s.dlAt["fresh"] = fresh, now.Add(-time.Minute)
+	s.downloads["untracked"] = untracked // 受信時刻の記録なし
+	s.dlMu.Unlock()
+
+	s.evictDownloads(now)
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("expired file should be removed from disk, stat err = %v", err)
+	}
+	for _, p := range []string{fresh, untracked} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s must be kept: %v", filepath.Base(p), err)
+		}
+	}
+	s.dlMu.RLock()
+	_, oldLeft := s.downloads["old"]
+	_, oldAtLeft := s.dlAt["old"]
+	_, freshLeft := s.downloads["fresh"]
+	_, untrackedLeft := s.downloads["untracked"]
+	s.dlMu.RUnlock()
+	if oldLeft || oldAtLeft || !freshLeft || !untrackedLeft {
+		t.Errorf("map state wrong: old=%v oldAt=%v fresh=%v untracked=%v", oldLeft, oldAtLeft, freshLeft, untrackedLeft)
+	}
+}
+
+// TestEvictDownloadsLoop_StopsOnCancel は掃除 goroutine が ctx 終了で戻ることを確認する。
+func TestEvictDownloadsLoop_StopsOnCancel(t *testing.T) {
+	s := New("127.0.0.1:0", time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.evictDownloadsLoop(ctx, 5*time.Millisecond); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("evictDownloadsLoop did not stop after cancel")
+	}
+}

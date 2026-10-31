@@ -1,0 +1,96 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os/exec"
+	"os/signal"
+	"runtime"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/flipslidersand-labs/mesh-drop/internal/config"
+	"github.com/flipslidersand-labs/mesh-drop/internal/webui"
+)
+
+// uiAuthToken is set from --auth-token flag (or config.yaml).
+// Declared at package level so it is accessible from cmdUI and tests.
+var uiAuthToken string
+
+func cmdUI() *cobra.Command {
+	var port int
+	var noOpen bool
+	var discoverTimeout time.Duration
+	var authToken string
+	cmd := &cobra.Command{
+		Use:   "ui",
+		Short: "Start local Web UI (drag & drop file transfer)",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := loadConfig(); err != nil {
+				return err
+			}
+			// config.yaml から未指定フラグを補完する
+			applyDefault(cmd, "port", &port, globalCfg.Port)
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("--port must be between 1 and 65535, got %d", port)
+			}
+			if cmd.Flags().Changed("auth-token") {
+				uiAuthToken = authToken
+			} else if globalCfg.AuthToken != "" {
+				uiAuthToken = globalCfg.AuthToken
+			}
+			// Web UI は内蔵 receiver を 0.0.0.0 で待ち受け mDNS 広告するため、
+			// receive/send と同じく永続 identity と TOFU ストアを必ず初期化する。
+			// 未初期化だと ephemeral 鍵・ピア検証なしで任意の LAN ホストから受信してしまう。
+			return initSessionOrWarn()
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addr := fmt.Sprintf("127.0.0.1:%d", port)
+			url := fmt.Sprintf("http://%s", addr)
+
+			fmt.Printf("MeshDrop UI  →  %s\n", url)
+			if uiAuthToken != "" {
+				fmt.Println("Authentication enabled (--auth-token).")
+			}
+			fmt.Println("Press Ctrl+C to stop.")
+
+			if !noOpen {
+				openBrowser(url)
+			}
+
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
+			srv := webui.New(addr, discoverTimeout)
+			srv.AuthToken = uiAuthToken
+			srv.HistPath = config.DataPath("history.json")
+			if err := srv.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVarP(&port, "port", "p", 8765, "HTTP listen port")
+	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open browser automatically")
+	cmd.Flags().DurationVar(&discoverTimeout, "discover", 3*time.Second, "peer discovery timeout per poll")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "require a Bearer token (Authorization header) to access the Web UI (empty = no auth)")
+	return cmd
+}
+
+func openBrowser(url string) {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd, args = "open", []string{url}
+	case "windows":
+		cmd, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
+	default:
+		cmd, args = "xdg-open", []string{url}
+	}
+	exec.Command(cmd, args...).Start() //nolint:errcheck
+}

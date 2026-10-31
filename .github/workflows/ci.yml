@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [master, "feat/**", "fix/**"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    uses: flipslidersand-labs/qa-workflows/.github/workflows/go-test.yml@main
+    with:
+      go-version: "1.26.8"   # #646: go.mod の toolchain と揃える（reusable は go-version-file 非対応）
+      runner: ubuntu-latest
+      coverage-threshold: 65   # #572: internal/transfer の doSend/doReceiveFile 等 QUIC ストリーム
+                                # 内部処理は defaultSession（パッケージスコープの共有グローバル）に
+                                # TestMain で固定 identity を一度だけ注入することで、非 integration
+                                # タグの通常テストからも安全にラウンドトリップ検証できるようになった
+                                # （roundtrip_test.go）。internal/transfer 49.0%→76.4%、全体
+                                # 57.1%→69.6%まで到達。安全マージンを見て65に設定。
+                                # 残る0%関数（SendPipeNAT/ListenPipeNAT/dispatchConn/doReceiveFile/
+                                # acceptChunk）はNAT実ソケット経由・CWD依存の旧互換経路で、
+                                # 個別にテスト追加する価値は低いため未対応。
+
+  go-version-sync:
+    name: go.mod / ci.yml go-version sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # reusable workflow (go-test.yml) は go-version-file 非対応のため、
+      # test ジョブの go-version 文字列と go.mod の toolchain/go の乖離を検出する (#613)
+      - name: Verify test job go-version matches go.mod
+        run: |
+          want=$(awk '$1=="toolchain"{sub(/^go/,"",$2);print $2;f=1} $1=="go"&&!g{g=$2} END{if(!f)print g}' go.mod)
+          have=$(awk '/^  test:/{t=1} t&&/go-version:/{gsub(/"/,"",$2);print $2;exit}' .github/workflows/ci.yml)
+          echo "go.mod: ${want} / ci.yml test job: ${have}"
+          if [ -z "$want" ] || [ "$want" != "$have" ]; then
+            echo "::error::ci.yml test job go-version (${have}) does not match go.mod (${want})"
+            exit 1
+          fi
+
+  windows-ci:
+    name: Windows build & test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        shell: bash
+        run: go build ./...
+
+      - name: Test
+        shell: bash
+        # Skip tests that rely on Unix file permissions (0600) or Unix path separators.
+        run: >
+          go test -short -race
+          -skip 'TestConfigPath_XDG|TestDataPath_XDG|TestLoadOrCreateIdentity_FilePermissions|TestKnownPeers_appendFile_FilePermissions|TestHandleSendDir_ValidRequest_Returns200'
+          ./...
+
+  integration:
+    runs-on: ${{ vars.GATE_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Run integration tests
+        run: go test -race -tags integration -timeout 180s ./internal/transfer/...
+
+  govulncheck:
+    # #646: 到達可能な stdlib/依存の既知脆弱性を検出する（toolchain 更新漏れの再発防止）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+
+  gitleaks:
+    permissions:
+      contents: read
+    uses: flipslidersand-labs/qa-workflows/.github/workflows/gitleaks.yml@b6bd09b2c8c2b1396d5f72f50875a917d7ef66f8
