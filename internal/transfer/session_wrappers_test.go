@@ -85,7 +85,7 @@ func TestChunkHandshake_PackageWrapper_PeerKeyMismatch(t *testing.T) {
 	}()
 
 	_, initErr := chunkHandshakeInitiator(context.Background(), a, wrongExpected.Public)
-	_ = <-respCh
+	t.Logf("peer side: %v", <-respCh)
 
 	if initErr == nil {
 		t.Error("want peer key mismatch error")
