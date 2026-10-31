@@ -164,7 +164,7 @@ func TestChunkHandshake_PeerKeyMismatch_Initiator(t *testing.T) {
 	}()
 
 	_, initErr := s.chunkHandshakeInitiator(context.Background(), a, wrongExpectedKey.Public)
-	<-errCh
+	_ = <-errCh
 
 	if initErr == nil {
 		t.Error("chunkHandshakeInitiator should return error when peer key mismatches expectedPeer")
@@ -197,7 +197,7 @@ func TestChunkHandshake_PeerKeyMismatch_Responder(t *testing.T) {
 	}()
 
 	_, respErr := s.chunkHandshakeResponder(context.Background(), b, wrongExpectedKey.Public)
-	<-errCh
+	_ = <-errCh
 
 	if respErr == nil {
 		t.Error("chunkHandshakeResponder should return error when peer key mismatches expectedPeer")
