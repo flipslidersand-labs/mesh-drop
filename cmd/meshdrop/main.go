@@ -70,7 +70,7 @@ func main() {
 	root.PersistentFlags().BoolVar(&allowNoTOFU, "allow-no-tofu", false,
 		"allow connections without TOFU peer verification (insecure, use only in trusted networks)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging to stderr")
-	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI(), cmdConfig(), cmdVersion())
+	root.AddCommand(cmdReceive(), cmdSend(), cmdInfo(), cmdRelay(), cmdUI(), cmdConfig(), cmdIdentity(), cmdTrust(), cmdVersion())
 	root.InitDefaultCompletionCmd()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

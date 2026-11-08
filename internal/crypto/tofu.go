@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bufio"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -88,6 +89,27 @@ func (kp *KnownPeers) Verify(pub []byte) error {
 	return err
 }
 
+// Trust registers a peer public key (64-char hex, as printed by `meshdrop identity`)
+// without prompting, so non-interactive environments (CI, scripts) can pre-trust a peer.
+// It is idempotent: trusting an already-known key is a no-op.
+func (kp *KnownPeers) Trust(keyHex string) error {
+	key := strings.ToLower(strings.TrimSpace(keyHex))
+	raw, err := hex.DecodeString(key)
+	if err != nil || len(raw) != 32 {
+		return fmt.Errorf("invalid peer key: want 64 hex chars (32 bytes), as printed by 'meshdrop identity'")
+	}
+	kp.mu.Lock()
+	defer kp.mu.Unlock()
+	if _, ok := kp.cache[key]; ok {
+		return nil
+	}
+	if err := kp.appendFile(key); err != nil {
+		return err
+	}
+	kp.cache[key] = struct{}{}
+	return nil
+}
+
 // promptAndTrust は /dev/tty を開いてユーザーにピア信頼の確認を求め、
 // 承認されれば known_peers ファイルとメモリキャッシュに登録する。
 // promptMu で直列化されるため、複数の未知ピアが同時接続しても
@@ -114,7 +136,9 @@ func (kp *KnownPeers) promptAndTrust(pub []byte, key string) error {
 	}
 	tty, err := open()
 	if err != nil {
-		return fmt.Errorf("peer verification failed: no TTY available (use --allow-no-tofu to skip): %w", err)
+		// --allow-no-tofu はここでは効かない(identity 初期化失敗時のみ有効)。
+		// 非対話環境では事前に `meshdrop trust <key>` で相手を登録する。
+		return fmt.Errorf("peer verification failed: no TTY available (pre-trust the peer: run 'meshdrop identity' on it, then 'meshdrop trust <key>' here): %w", err)
 	}
 	defer tty.Close()
 
