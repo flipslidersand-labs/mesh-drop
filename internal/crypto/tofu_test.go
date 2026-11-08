@@ -128,8 +128,13 @@ func TestKnownPeers_Verify_UnknownPeer_ErrorContainsTTYMessage(t *testing.T) {
 	if !strings.Contains(msg, "no TTY") && !strings.Contains(msg, "TTY") {
 		t.Errorf("error should mention TTY unavailability, got: %v", msg)
 	}
-	if !strings.Contains(msg, "--allow-no-tofu") && !strings.Contains(msg, "--insecure") {
-		t.Errorf("error should hint --insecure flag, got: %v", msg)
+	// --allow-no-tofu はこの経路では効かない(mesh-drop#1)ので案内してはいけない。
+	// 実際に効く手順(meshdrop trust)を案内する。
+	if strings.Contains(msg, "--allow-no-tofu") {
+		t.Errorf("error must not point at --allow-no-tofu (it does not skip this check), got: %v", msg)
+	}
+	if !strings.Contains(msg, "meshdrop trust") || !strings.Contains(msg, "meshdrop identity") {
+		t.Errorf("error should guide to 'meshdrop identity' / 'meshdrop trust', got: %v", msg)
 	}
 }
 

@@ -78,6 +78,19 @@ meshdrop send --compress --compress-level 9 ./big.iso   # zstd (1=fastest, 9=bes
 
 When multiple receivers are found, an interactive prompt lets you choose.
 
+### Peer trust (first connection)
+
+The first time two hosts connect, each side asks `Trust this peer? [y/N]` on the terminal (TOFU), and remembers the answer in `known_peers`.
+
+Without a terminal (CI, scripts, ssh without a tty) there is nothing to answer the prompt, so pre-trust the peer once on each side:
+
+```bash
+meshdrop identity          # run on each host: prints its public key (64 hex chars)
+meshdrop trust <peer-key>  # run on each host with the OTHER host's key
+```
+
+Exchange the keys over a channel you trust. `--allow-no-tofu` is *not* a substitute: it only applies when the local identity cannot be loaded.
+
 ### Resume an interrupted transfer
 
 Just re-run the same command — MeshDrop detects the `.meshdrop-state` checkpoint and skips already-transferred chunks:
