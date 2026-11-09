@@ -8,11 +8,11 @@ require (
 	github.com/flynn/noise v1.1.0
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/klauspost/compress v1.20.3
-	github.com/quic-go/quic-go v0.64.1
+	github.com/quic-go/quic-go v0.65.0
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	golang.org/x/term v0.47.0
 	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
