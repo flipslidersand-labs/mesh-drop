@@ -1,5 +1,7 @@
 # MeshDrop
 
+Release type: `library`
+
 P2P encrypted file transfer over LAN or the Internet — Go / QUIC / Noise Protocol / BLAKE3
 
 ```
