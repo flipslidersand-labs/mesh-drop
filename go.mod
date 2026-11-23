@@ -16,7 +16,7 @@ require (
 	golang.org/x/term v0.48.0
 	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
-	lukechampine.com/blake3 v1.4.1
+	lukechampine.com/blake3 v1.5.1
 )
 
 require (
